@@ -57,7 +57,10 @@ mod tests {
     fn the_version_is_the_apps() {
         let manifest = include_str!("../../Bern.toml");
         let app = &manifest[manifest.find("[app]").unwrap()..];
-        let line = app.lines().find(|line| line.starts_with("version")).unwrap();
+        let line = app
+            .lines()
+            .find(|line| line.starts_with("version"))
+            .unwrap();
         assert_eq!(line, format!("version = \"{}\"", env!("CARGO_PKG_VERSION")));
     }
 }

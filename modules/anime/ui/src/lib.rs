@@ -8,21 +8,13 @@ use erika_protocol::erika;
 mod provider_editor;
 use provider_editor::*;
 
-/// Tabs below the film of the details page.
-#[bern::value]
-pub enum DetailTab {
-    #[label(tr! { "zh-Hans" => "简介", "en" => "About" })]
-    About,
-    #[label(tr! { "zh-Hans" => "评论", "en" => "Comments" })]
-    Comments,
-}
-
 /// Drafts of the anime module's pages.
 #[bern::session]
 pub struct AnimeDraft {
     /// Canonical UUID at the leading edge of the film.
     pub episode: String,
-    pub tab: DetailTab,
+    pub episode_list_pos: String,
+    pub episode_jump: String,
     /// The review being written, started from the one on Bangumi.
     pub review: String,
 }
@@ -47,7 +39,9 @@ pub fn home_page(app: erika::Client, anime: anime::Client) -> impl View {
         // window with a sidebar covers it with them, leaving this page as it
         // is underneath.
         if anime.opened != "" && !anime.opened_from_schedule && anime.back == BackTo::Home && !window.unfolded && (window.compact || window.tv) {
-            details(app: app, anime: anime)
+            Stack(appear: detail_in, disappear: detail_out) {
+                details(app: app, anime: anime)
+            }
         } else {
             home(app: app, anime: anime)
         }
@@ -301,7 +295,7 @@ pub fn timeline_track(anime: anime::Client) -> impl View {
                                 ForEach(items: group.shows, key: id) |show| {
                                     Column(gap: 0, width: 88) {
                                         Button(id: open_airing, label: show.title, variant: poster) {
-                                            Image(source: show.poster, width: 88, height: 132, fit: cover, label: show.title)
+                                            Image(source: show.poster, width: 88, height: 132, fit: cover, corner: poster, label: show.title, hero: poster, hero_key: show.id)
                                         } => anime.open(show.id)
                                         Canvas(height: 6)
                                         Text(content: show.title, style: caption, lines: 1)
@@ -368,19 +362,20 @@ pub fn timeline_track(anime: anime::Client) -> impl View {
     }
 }
 
-/// The opened show: a viewport-sized backdrop behind independently
-/// scrolling facts, actions and episodes.
+/// The opened show: a viewport-sized dark backdrop behind independently
+/// scrolling facts, pure Liquid Glass actions and episodes.
 #[component]
-pub fn details(app: erika::Client, anime: anime::Client) -> impl View {
+pub fn details(
+    app: erika::Client,
+    anime: anime::Client,
+    #[session] draft: AnimeDraft,
+) -> impl View {
     ui! {
-        Stack(align: top_leading) {
-            // Phones extend the backdrop into their system safe areas. Desktop
-            // toolbars keep their own room, joining the backdrop's solid top edge.
-            if window.compact || window.unfolded {
-                Stack(under_bars: true, align: top_leading) {
-                    details_wash(anime: anime)
-                }
-            } else {
+        Stack(appearance: dark, tint: text.primary, align: top_leading) {
+            if anime.episode_jump_target != "" {
+                Watch(value: anime.episode_jump_seq) => draft.episode.set(anime.episode_jump_target)
+            }
+            Stack(under_bars: true, align: top_leading) {
                 details_wash(anime: anime)
             }
             Adaptive(id: details_layout) {
@@ -394,95 +389,295 @@ pub fn details(app: erika::Client, anime: anime::Client) -> impl View {
                     desktop_details(anime: anime)
                 }
             }
-            if anime.rating_open {
-                rating_dialog(app: app, anime: anime)
-            }
-            if anime.review_open {
-                review_dialog(app: app, anime: anime)
-            }
-            if anime.mapping_open {
-                provider_dialog(app: app, anime: anime)
+            if anime.episode_list_open {
+                episode_list_modal(app: app, anime: anime)
             }
         }
     }
 }
 
-/// The score dialog: Bangumi's ten steps with a Bangumi account, the even
-/// five without; picking one rates the show and closes it.
+/// Sub-window listing episodes with filtering, sorting and numeric jump.
 #[component]
-pub fn rating_dialog(app: erika::Client, anime: anime::Client) -> impl View {
+pub fn episode_list_modal(
+    app: erika::Client,
+    anime: anime::Client,
+    #[session] draft: AnimeDraft,
+) -> impl View {
     ui! {
-        Modal(width: 360, appear: pop_in, disappear: fade) {
-            Column(gap: 12, padding: 24) {
-                Text(content: tr! { "zh-Hans" => "给这部作品评分", "en" => "Rate this show" }, style: title3)
-                Text(content: anime.sync_targets, style: caption, emphasis: secondary)
-                if anime.fine_scores {
-                    Picker(id: score_steps, label: tr! { "zh-Hans" => "评分", "en" => "Score" }, selected: anime.my_score, style: radio) {
-                        PickerOption(value: Score::Ten, label: tr! { "zh-Hans" => "10 分 · 超神作", "en" => "10 · All-time best" })
-                        PickerOption(value: Score::Nine, label: tr! { "zh-Hans" => "9 分 · 神作", "en" => "9 · Masterpiece" })
-                        PickerOption(value: Score::Eight, label: tr! { "zh-Hans" => "8 分 · 力荐", "en" => "8 · Great" })
-                        PickerOption(value: Score::Seven, label: tr! { "zh-Hans" => "7 分 · 推荐", "en" => "7 · Good" })
-                        PickerOption(value: Score::Six, label: tr! { "zh-Hans" => "6 分 · 还行", "en" => "6 · Fair" })
-                        PickerOption(value: Score::Five, label: tr! { "zh-Hans" => "5 分 · 不过不失", "en" => "5 · Average" })
-                        PickerOption(value: Score::Four, label: tr! { "zh-Hans" => "4 分 · 较差", "en" => "4 · Poor" })
-                        PickerOption(value: Score::Three, label: tr! { "zh-Hans" => "3 分 · 差", "en" => "3 · Bad" })
-                        PickerOption(value: Score::Two, label: tr! { "zh-Hans" => "2 分 · 很差", "en" => "2 · Very bad" })
-                        PickerOption(value: Score::One, label: tr! { "zh-Hans" => "1 分 · 不忍直视", "en" => "1 · Unwatchable" })
-                    } => anime.pick_score(anime.my_score)
-                } else {
-                    Picker(id: score_even, label: tr! { "zh-Hans" => "评分", "en" => "Score" }, selected: anime.my_score, style: radio) {
-                        PickerOption(value: Score::Ten, label: tr! { "zh-Hans" => "10 分 · 超神作", "en" => "10 · All-time best" })
-                        PickerOption(value: Score::Eight, label: tr! { "zh-Hans" => "8 分 · 力荐", "en" => "8 · Great" })
-                        PickerOption(value: Score::Six, label: tr! { "zh-Hans" => "6 分 · 还行", "en" => "6 · Fair" })
-                        PickerOption(value: Score::Four, label: tr! { "zh-Hans" => "4 分 · 较差", "en" => "4 · Poor" })
-                        PickerOption(value: Score::Two, label: tr! { "zh-Hans" => "2 分 · 很差", "en" => "2 · Very bad" })
-                    } => anime.pick_score(anime.my_score)
+        Modal(width: 640, cover: compact) {
+            Column(gap: 12, padding: 18) {
+                if anime.episode_jump_target != "" {
+                    Watch(value: anime.episode_jump_seq) => draft.episode_list_pos.set(anime.episode_jump_target)
                 }
                 Row(gap: 10, align: center) {
-                    if anime.my_score != Score::Unrated {
-                        Button(id: rating_clear, label: tr! { "zh-Hans" => "清除评分", "en" => "Clear Rating" }, role: destructive, prominence: plain) => anime.pick_score(Score::Unrated)
+                    Text(content: tr! { "zh-Hans" => "剧集列表", "en" => "Episodes" }, style: title3)
+                    if anime.show.episodes > 0 {
+                        Text(content: tr! { "zh-Hans" => "{count} 话", "en" => "{count} ep"; count: anime.show.episodes }, style: caption, emphasis: secondary)
                     }
                     Spacer
-                    Button(id: rating_done, label: tr! { "zh-Hans" => "完成", "en" => "Done" }, shortcut: app.keys.back) => anime.show_rating(false)
                 }
+                if anime.has_seasons {
+                    ScrollView(axis: horizontal, indicators: hidden) {
+                        season_switcher_capsule(anime: anime)
+                    }
+                }
+                Flow(gap: 10) {
+                    Picker(id: episode_filter, label: tr! { "zh-Hans" => "筛选", "en" => "Filter" }, label_hidden: true, selected: anime.episode_filter, style: segmented) => anime.set_episode_filter(anime.episode_filter)
+                    Picker(id: episode_sort, label: tr! { "zh-Hans" => "排序", "en" => "Sort" }, label_hidden: true, selected: anime.episode_sort, style: segmented) => anime.set_episode_sort(anime.episode_sort)
+                    Spacer
+                    Row(gap: 6, width: 152, align: center) {
+                        TextInput(id: episode_jump, label: tr! { "zh-Hans" => "集数跳转", "en" => "Episode number" }, label_hidden: true, value: draft.episode_jump, prompt: tr! { "zh-Hans" => "输入集数跳转", "en" => "Jump to #" }) => anime.jump_to_episode(draft.episode_jump)
+                        IconButton(id: episode_jump_go, icon: "chevron.right", label: tr! { "zh-Hans" => "跳转", "en" => "Jump" }, enabled: draft.episode_jump != "") => anime.jump_to_episode(draft.episode_jump)
+                    }
+                }
+                if anime.episode_jump_error != "" {
+                    Text(content: anime.episode_jump_error, style: caption, emphasis: secondary)
+                }
+                if anime.has_listed_episodes {
+                    Column(height: 380) {
+                        ScrollView(position: draft.episode_list_pos, arrival: nudge) {
+                            Column(gap: 4) {
+                                ForEach(items: anime.listed_episodes, key: id) |episode| {
+                                    episode_list_row(anime: anime, episode: episode)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Column(gap: 6, padding_y: 28, align: center) {
+                        Text(content: tr! { "zh-Hans" => "没有符合筛选条件的剧集", "en" => "No episodes match this filter" }, emphasis: secondary)
+                    }
+                }
+            }
+        } => anime.show_episode_list(false)
+    }
+}
+
+#[component]
+pub fn episode_list_row(anime: anime::Client, episode: anime::Episode) -> impl View {
+    ui! {
+        Column(gap: 6) {
+            if episode.season_marker != "" {
+                Row(gap: 7, padding_y: 4, align: center) {
+                    Canvas(width: 2, height: 14) {
+                        Shape(kind: capsule, fill: text.secondary)
+                    }
+                    Text(content: episode.season_marker, style: caption, emphasis: secondary)
+                }
+            }
+            Row(gap: 8, align: center) {
+                if anime.hover_glow {
+                    Button(id: episode_row_glow, label: episode.title, variant: episode_row, width: fill, glow: 1, glow_opacity: 0.3) {
+                        episode_list_row_body(anime: anime, episode: episode)
+                    } => anime.play_listed_episode(episode.id)
+                } else {
+                    Button(id: episode_row, label: episode.title, variant: episode_row, width: fill) {
+                        episode_list_row_body(anime: anime, episode: episode)
+                    } => anime.play_listed_episode(episode.id)
+                }
+            if anime.episode_marking {
+                if episode.watched {
+                    IconButton(id: row_mark_unwatched, icon: "checkmark.circle", label: tr! { "zh-Hans" => "标记为未看", "en" => "Mark as not watched" }, prominence: plain) => anime.mark_episode(episode.id, false)
+                } else {
+                    IconButton(id: row_mark_watched, icon: "circle", label: tr! { "zh-Hans" => "标记为已看", "en" => "Mark as watched" }, prominence: plain) => anime.mark_episode(episode.id, true)
+                }
+            }
+        }
+        }
+    }
+}
+
+#[component]
+pub fn episode_list_row_body(anime: anime::Client, episode: anime::Episode) -> impl View {
+    ui! {
+        Row(gap: 12, align: center) {
+            if episode.pictured {
+                Stack(align: bottom_leading, width: 96, height: 54, variant: phone_thumb) {
+                    Image(source: episode.still, width: 96, height: 54, fit: cover, corner: thumb, label: episode.title)
+                    Rail {
+                        Canvas(from: 0, to: episode.progress, height: 3) {
+                            Shape(kind: rect, fill: text.primary)
+                        }
+                    }
+                }
+            } else {
+                Stack(align: center, width: 96, height: 54) {
+                    Canvas(width: 96, height: 54) {
+                        Shape(kind: rect, corner: thumb, fill: fill.subtle)
+                    }
+                    Text(content: episode.numeral, style: headline, emphasis: secondary)
+                }
+            }
+            Column(gap: 3) {
+                Text(content: episode.title, style: headline, lines: 1)
+                Row(gap: 4, align: center) {
+                    Text(content: episode.note, style: caption, emphasis: secondary, lines: 1)
+                    if episode.watched {
+                        Text(content: tr! { "zh-Hans" => "· 已看", "en" => "· Watched" }, style: caption, emphasis: secondary, lines: 1)
+                    }
+                }
+            }
+            Spacer
+            if anime.episode_jump_target == episode.id {
+                Label(title: tr! { "zh-Hans" => "已定位", "en" => "Located" }, icon: "checkmark", display: icon)
             }
         }
     }
 }
 
-/// The review dialog: the review on Bangumi, read anew as it opens, is
-/// where the writing starts; sending it saves it on Bangumi.
+/// Quick watch-status bubble opened from the heart icon in the action capsule.
 #[component]
-pub fn review_dialog(app: erika::Client, anime: anime::Client, #[session] draft: AnimeDraft) -> impl View {
+pub fn status_popover(anime: anime::Client) -> impl View {
     ui! {
-        Modal(width: 480, appear: pop_in, disappear: fade) {
-            Column(gap: 12, padding: 24) {
-                // Seed once when the read finishes, never when the user empties the draft.
-                if !anime.review_loading {
-                    Watch(value: anime.review_loading) => draft.review.set(anime.review_text)
+        Column(gap: 2, width: 170) {
+            Button(id: status_want, label: tr! { "zh-Hans" => "想看", "en" => "Want to Watch" }) {
+                Row(gap: 10, height: 34, padding_x: 6, align: center) {
+                    Text(content: tr! { "zh-Hans" => "想看", "en" => "Want to Watch" })
+                    Spacer
+                    if anime.show.status == WatchStatus::Want {
+                        Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon)
+                    }
                 }
-                Text(content: tr! { "zh-Hans" => "写评价", "en" => "Write a Review" }, style: title3)
-                Text(content: tr! { "zh-Hans" => "保存在你的 Bangumi 收藏里，最多 200 字", "en" => "Saved with your Bangumi collection, up to 200 characters" }, style: caption, emphasis: secondary)
+            } => anime.set_status(WatchStatus::Want)
+            Button(id: status_watching, label: tr! { "zh-Hans" => "在看", "en" => "Watching" }) {
+                Row(gap: 10, height: 34, padding_x: 6, align: center) {
+                    Text(content: tr! { "zh-Hans" => "在看", "en" => "Watching" })
+                    Spacer
+                    if anime.show.status == WatchStatus::Watching {
+                        Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon)
+                    }
+                }
+            } => anime.set_status(WatchStatus::Watching)
+            Button(id: status_watched, label: tr! { "zh-Hans" => "看过", "en" => "Watched" }) {
+                Row(gap: 10, height: 34, padding_x: 6, align: center) {
+                    Text(content: tr! { "zh-Hans" => "看过", "en" => "Watched" })
+                    Spacer
+                    if anime.show.status == WatchStatus::Watched {
+                        Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon)
+                    }
+                }
+            } => anime.set_status(WatchStatus::Watched)
+            Button(id: status_dropped, label: tr! { "zh-Hans" => "抛弃", "en" => "Dropped" }) {
+                Row(gap: 10, height: 34, padding_x: 6, align: center) {
+                    Text(content: tr! { "zh-Hans" => "抛弃", "en" => "Dropped" })
+                    Spacer
+                    if anime.show.status == WatchStatus::Dropped {
+                        Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon)
+                    }
+                }
+            } => anime.set_status(WatchStatus::Dropped)
+        }
+    }
+}
+
+/// Bangumi reviews bubble opened from the comments icon beside status.
+#[component]
+pub fn comments_popover(anime: anime::Client) -> impl View {
+    ui! {
+        Column(gap: 12, width: 420, height: 420) {
+            Row(gap: 8, align: center) {
+                Text(content: tr! { "zh-Hans" => "评论", "en" => "Comments" }, style: headline)
+                Spacer
+                IconButton(id: refresh_reviews, icon: "arrow.clockwise", label: tr! { "zh-Hans" => "刷新", "en" => "Refresh" }, enabled: !anime.comments_loading, prominence: plain) => anime.refresh_comments()
+            }
+            ScrollView {
+                review_section(anime: anime)
+            }
+        }
+    }
+}
+
+/// Combined watch-status, rating and review bubble opened from the compose icon.
+#[component]
+pub fn rate_review_popover(anime: anime::Client, #[session] draft: AnimeDraft) -> impl View {
+    ui! {
+        Column(gap: 12, width: 380) {
+            if !anime.review_loading {
+                Watch(value: anime.review_loading) => draft.review.set(anime.review_text)
+            }
+            Row(gap: 8, align: center) {
+                Button(id: compose_want, label: tr! { "zh-Hans" => "想看", "en" => "Want" }, shape: capsule, height: 30) => anime.set_status(WatchStatus::Want)
+                Button(id: compose_watching, label: tr! { "zh-Hans" => "在看", "en" => "Watching" }, shape: capsule, height: 30) => anime.set_status(WatchStatus::Watching)
+                Button(id: compose_watched, label: tr! { "zh-Hans" => "看过", "en" => "Watched" }, shape: capsule, height: 30) => anime.set_status(WatchStatus::Watched)
+                Button(id: compose_dropped, label: tr! { "zh-Hans" => "抛弃", "en" => "Dropped" }, shape: capsule, height: 30) => anime.set_status(WatchStatus::Dropped)
+            }
+            Divider
+            if anime.can_rate {
+                Row(gap: 10, align: center) {
+                    Text(content: tr! { "zh-Hans" => "评分", "en" => "Score" }, style: headline)
+                    Spacer
+                    if anime.my_score != Score::Unrated {
+                        Button(id: rating_clear, label: tr! { "zh-Hans" => "清除", "en" => "Clear" }, role: destructive, prominence: plain) => anime.pick_score(Score::Unrated)
+                    }
+                    if anime.fine_scores {
+                        Picker(id: score_steps, label: tr! { "zh-Hans" => "评分", "en" => "Score" }, label_hidden: true, style: menu, selected: anime.my_score) {
+                            PickerOption(value: Score::Ten, label: tr! { "zh-Hans" => "10 分 · 超神作", "en" => "10 · All-time best" })
+                            PickerOption(value: Score::Nine, label: tr! { "zh-Hans" => "9 分 · 神作", "en" => "9 · Masterpiece" })
+                            PickerOption(value: Score::Eight, label: tr! { "zh-Hans" => "8 分 · 力荐", "en" => "8 · Great" })
+                            PickerOption(value: Score::Seven, label: tr! { "zh-Hans" => "7 分 · 推荐", "en" => "7 · Good" })
+                            PickerOption(value: Score::Six, label: tr! { "zh-Hans" => "6 分 · 还行", "en" => "6 · Fair" })
+                            PickerOption(value: Score::Five, label: tr! { "zh-Hans" => "5 分 · 不过不失", "en" => "5 · Average" })
+                            PickerOption(value: Score::Four, label: tr! { "zh-Hans" => "4 分 · 较差", "en" => "4 · Poor" })
+                            PickerOption(value: Score::Three, label: tr! { "zh-Hans" => "3 分 · 差", "en" => "3 · Bad" })
+                            PickerOption(value: Score::Two, label: tr! { "zh-Hans" => "2 分 · 很差", "en" => "2 · Very bad" })
+                            PickerOption(value: Score::One, label: tr! { "zh-Hans" => "1 分 · 不忍直视", "en" => "1 · Unwatchable" })
+                        } => anime.pick_score(anime.my_score)
+                    } else {
+                        Picker(id: score_even, label: tr! { "zh-Hans" => "评分", "en" => "Score" }, label_hidden: true, style: menu, selected: anime.my_score) {
+                            PickerOption(value: Score::Ten, label: tr! { "zh-Hans" => "10 分 · 超神作", "en" => "10 · All-time best" })
+                            PickerOption(value: Score::Eight, label: tr! { "zh-Hans" => "8 分 · 力荐", "en" => "8 · Great" })
+                            PickerOption(value: Score::Six, label: tr! { "zh-Hans" => "6 分 · 还行", "en" => "6 · Fair" })
+                            PickerOption(value: Score::Four, label: tr! { "zh-Hans" => "4 分 · 较差", "en" => "4 · Poor" })
+                            PickerOption(value: Score::Two, label: tr! { "zh-Hans" => "2 分 · 很差", "en" => "2 · Very bad" })
+                        } => anime.pick_score(anime.my_score)
+                    }
+                }
+            }
+            if anime.can_review {
                 if anime.review_loading {
-                    Text(content: tr! { "zh-Hans" => "正在读取你在 Bangumi 上的评价…", "en" => "Reading your review on Bangumi…" }, style: caption, emphasis: secondary)
+                    Text(content: tr! { "zh-Hans" => "正在读取评价…", "en" => "Reading your review…" }, style: caption, emphasis: secondary)
                 } else {
-                    TextInput(id: review_field, label: tr! { "zh-Hans" => "评价", "en" => "Review" }, label_hidden: true, value: draft.review, kind: multiline, prompt: tr! { "zh-Hans" => "说说你对这部作品的看法", "en" => "What did you think of it?" })
+                    TextInput(id: review_field, label: tr! { "zh-Hans" => "评价", "en" => "Review" }, label_hidden: true, value: draft.review, kind: multiline, prompt: tr! { "zh-Hans" => "写下你的评价（最多 200 字）", "en" => "Write a review (up to 200 characters)" })
                 }
                 if anime.review_error != "" {
                     Text(content: anime.review_error, style: caption, lines: 3)
                 }
                 Row(gap: 10, align: center) {
                     if anime.review_text != "" {
-                        Button(id: review_remove, label: tr! { "zh-Hans" => "删除评价", "en" => "Delete Review" }, role: destructive, prominence: plain, enabled: !anime.review_saving, clears: draft.review) => anime.submit_review("")
+                        Button(id: review_remove, label: tr! { "zh-Hans" => "删除评价", "en" => "Delete" }, role: destructive, prominence: plain, enabled: !anime.review_saving, clears: draft.review) => anime.submit_review("")
                     }
                     Spacer
-                    Button(id: review_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, role: cancel, prominence: plain, shortcut: app.keys.back, clears: draft.review) => anime.show_review(false)
                     if anime.review_saving {
-                        Button(id: review_sending, label: tr! { "zh-Hans" => "正在提交…", "en" => "Sending…" }, prominence: prominent, enabled: false) => anime.show_review(true)
+                        Button(id: review_sending, label: tr! { "zh-Hans" => "正在提交…", "en" => "Sending…" }, enabled: false) => anime.show_review(true)
                     } else {
-                        Button(id: review_send, label: tr! { "zh-Hans" => "提交", "en" => "Send" }, prominence: prominent, enabled: !anime.review_loading) => anime.submit_review(draft.review)
+                        Button(id: review_send, label: tr! { "zh-Hans" => "提交", "en" => "Send" }, enabled: !anime.review_loading) => anime.submit_review(draft.review)
                     }
                 }
+            } else {
+                Text(content: tr! { "zh-Hans" => "登录 Bangumi 并确认关联后可打分与发布评价", "en" => "Sign in to Bangumi and confirm the link to rate and review" }, style: caption, emphasis: secondary)
+            }
+        }
+    }
+}
+
+/// Shared icon-only Liquid Glass action capsule beside the play button.
+#[component]
+pub fn detail_action_capsule(anime: anime::Client) -> impl View {
+    ui! {
+        ControlGroup(label: tr! { "zh-Hans" => "作品操作", "en" => "Show actions" }, height: 36) {
+            PopoverButton(id: status, icon: "heart", label: anime.show.status, open: anime.status_open) {
+                status_popover(anime: anime)
+            } => anime.show_status(anime.status_open)
+            PopoverButton(id: comments, icon: "bubble.left.and.bubble.right", label: tr! { "zh-Hans" => "评论", "en" => "Comments" }, open: anime.comments_open) {
+                comments_popover(anime: anime)
+            } => anime.show_comments(anime.comments_open)
+            PopoverButton(id: review_rate, icon: "square.and.pencil", label: tr! { "zh-Hans" => "评价与打分", "en" => "Rate and review" }, open: anime.review_open) {
+                rate_review_popover(anime: anime)
+            } => anime.show_review(anime.review_open)
+            if anime.can_map {
+                PopoverButton(id: provider_links, icon: "link", label: tr! { "zh-Hans" => "提供方关联", "en" => "Provider links" }, open: anime.mapping_open) {
+                    provider_popover(anime: anime)
+                } => anime.show_mappings(anime.mapping_open)
             }
         }
     }
@@ -503,100 +698,185 @@ pub fn sync_status(anime: anime::Client) -> impl View {
 }
 
 #[component]
-pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl View {
+pub fn desktop_details(anime: anime::Client) -> impl View {
     ui! {
-        ScrollView(appear: page_in) {
-            Stack(align: top_leading) {
+        if window.short || window.medium {
+            ScrollView(appear: page_in) {
                 Column(gap: 0, padding_x: if window.tv { 56 } else { 32 }, padding_y: 12) {
-                    Row(gap: 36, align: top) {
-                        Image(source: anime.show.poster, width: 220, height: 330, fit: cover, corner: poster, label: anime.show.title)
-                        Column(gap: 0, stagger: 0.03) {
-                            Canvas(height: 10)
-                            detail_kind(anime: anime)
-                            Canvas(height: 8)
-                            if anime.show.logo.url != "" {
-                                Image(source: anime.show.logo, width: 320, height: 90, fit: contain, label: anime.show.title)
-                            } else {
-                                Text(content: anime.show.title, style: title, lines: 2, appear: fade)
-                            }
-                            Canvas(height: 12)
-                            Row(gap: 10, align: center, appear: fade) {
-                                if anime.show.rating > 0.0 {
-                                    Text(content: tr! { "zh-Hans" => "★ {rating}", "en" => "★ {rating}"; rating: anime.show.rating }, style: callout)
-                                }
-                                if !window.medium {
-                                    Row(gap: 6) {
-                                        ForEach(items: anime.show.tags, key: name) |tag| {
-                                            tag_chip(name: tag.name)
-                                        }
-                                    }
-                                }
-                            }
-                            // Upright on a tablet the tags and the summary
-                            // have only what the poster leaves them.
-                            if window.medium {
-                                Canvas(height: 10)
-                                ScrollView(axis: horizontal, indicators: mouse) {
-                                    Row(gap: 6) {
-                                        ForEach(items: anime.show.tags, key: name) |tag| {
-                                            tag_chip(name: tag.name)
-                                        }
-                                    }
-                                }
-                                Canvas(height: 12)
-                                Column(appear: fade) {
-                                    Text(content: anime.show.summary, lines: 3)
-                                    detail_fetch_status(anime: anime)
-                                }
-                            } else {
-                                Canvas(height: 14)
-                                Column(width: 600, appear: fade) {
-                                    Text(content: anime.show.summary, lines: 3)
-                                    detail_fetch_status(anime: anime)
-                                }
-                            }
-                            Canvas(height: 20)
-                            Row(gap: 10, align: center, appear: fade) {
-                                Button(id: watch, label: anime.next, icon: "play.fill", prominence: prominent, variant: primary) => anime.play_episode(anime.next_episode)
-                                Menu(id: status, label: anime.show.status, icon: "heart") {
-                                    MenuItem(id: want, label: tr! { "zh-Hans" => "想看", "en" => "Want to Watch" }) => anime.set_status(WatchStatus::Want)
-                                    MenuItem(id: watching_now, label: tr! { "zh-Hans" => "在看", "en" => "Watching" }) => anime.set_status(WatchStatus::Watching)
-                                    MenuItem(id: watched, label: tr! { "zh-Hans" => "看过", "en" => "Watched" }) => anime.set_status(WatchStatus::Watched)
-                                    MenuItem(id: dropped, label: tr! { "zh-Hans" => "抛弃", "en" => "Dropped" }) => anime.set_status(WatchStatus::Dropped)
-                                }
-                                if anime.can_rate {
-                                    Button(id: rate, label: anime.my_score, icon: "star") => anime.show_rating(true)
-                                }
-                                if anime.can_review {
-                                    Button(id: write_review, label: tr! { "zh-Hans" => "写评价", "en" => "Review" }, icon: "note.text") => anime.show_review(true)
-                                }
-                            }
-                            Canvas(height: 8)
-                            sync_status(anime: anime)
-                        }
-                    }
-                    Canvas(height: 34)
-                    Row(gap: 10, align: center, appear: fade) {
-                        episode_heading(anime: anime)
-                        Spacer
-                        IconButton(id: film_back, icon: "chevron.left", label: tr! { "zh-Hans" => "上一页", "en" => "Previous" }) => draft.episode.set(anime.first_episode)
-                        IconButton(id: film_on, icon: "chevron.right", label: tr! { "zh-Hans" => "下一页", "en" => "Next" }) => draft.episode.set(anime.last_episode)
-                    }
-                    Canvas(height: 6)
-                    // The film pages with the arrows above it, as the design's
-                    // does; only a mouse, which cannot drag it, gets a scroll
-                    // bar. `.d-track`: 22 points above and below the cells.
-                    ScrollView(axis: horizontal, snap: start, position: draft.episode, indicators: mouse) {
-                        Row(gap: 30, padding_y: 22) {
-                            ForEach(items: anime.episodes, key: id) |episode| {
-                                film_cell(anime: anime, episode: episode)
-                            }
-                        }
-                    }
-                    Canvas(height: 18)
-                    detail_information(anime: anime)
-                    Canvas(height: 32)
+                    desktop_details_hero(anime: anime)
+                    Canvas(height: 24)
+                    desktop_details_film(anime: anime)
+                    Canvas(height: 20)
                 }
+            }
+        } else {
+            Column(gap: 0, padding_x: if window.tv { 56 } else { 32 }, padding_y: 12, appear: page_in) {
+                desktop_details_hero(anime: anime)
+                Spacer
+                desktop_details_film(anime: anime)
+            }
+        }
+    }
+}
+
+#[component]
+pub fn desktop_details_hero(anime: anime::Client) -> impl View {
+    ui! {
+        Row(gap: 36, align: top) {
+            if anime.hover_glow {
+                Stack(variant: detail_poster, width: 212, height: 318, glow: 1, glow_opacity: 0.35) {
+                    Image(source: anime.show.poster, width: 212, height: 318, fit: cover, corner: poster, label: anime.show.title, hero: poster, hero_key: anime.hero_id)
+                }
+            } else {
+                Stack(variant: detail_poster, width: 212, height: 318) {
+                    Image(source: anime.show.poster, width: 212, height: 318, fit: cover, corner: poster, label: anime.show.title, hero: poster, hero_key: anime.hero_id)
+                }
+            }
+            Column(gap: 0, stagger: 0.03) {
+                Canvas(height: 8)
+                detail_kind(anime: anime)
+                Canvas(height: 8)
+                if anime.show.logo.url != "" {
+                    Image(source: anime.show.logo, width: 320, height: 88, fit: contain, label: anime.show.title)
+                } else {
+                    Text(content: anime.show.title, style: title, lines: 2, appear: fade)
+                }
+                Canvas(height: 12)
+                Row(gap: 10, align: center, appear: fade) {
+                    if anime.show.rating > 0.0 {
+                        Text(content: tr! { "zh-Hans" => "★ {rating}", "en" => "★ {rating}"; rating: anime.show.rating }, style: callout)
+                    }
+                    if !window.medium {
+                        Row(gap: 6) {
+                            ForEach(items: anime.show.tags, key: name) |tag| {
+                                tag_chip(name: tag.name)
+                            }
+                        }
+                    }
+                }
+                // Upright on a tablet the tags and the summary
+                // have only what the poster leaves them.
+                if window.medium {
+                    Canvas(height: 10)
+                    ScrollView(axis: horizontal, indicators: mouse) {
+                        Row(gap: 6) {
+                            ForEach(items: anime.show.tags, key: name) |tag| {
+                                tag_chip(name: tag.name)
+                            }
+                        }
+                    }
+                    Canvas(height: 12)
+                    Column(appear: fade) {
+                        Text(content: anime.show.summary, lines: 5)
+                        detail_fetch_status(anime: anime)
+                    }
+                } else {
+                    Canvas(height: 12)
+                    Column(width: 600, appear: fade) {
+                        Text(content: anime.show.summary, lines: 5)
+                        detail_fetch_status(anime: anime)
+                    }
+                }
+                Canvas(height: 18)
+                Row(gap: 12, align: center, appear: fade) {
+                    Row(width: 156) {
+                        Button(id: watch, label: anime.next, icon: "play.fill", shape: capsule, height: 36, width: fill, variant: watch_capsule) => anime.play_episode(anime.next_episode)
+                    }
+                    detail_action_capsule(anime: anime)
+                }
+                Canvas(height: 8)
+                sync_status(anime: anime)
+            }
+        }
+    }
+}
+
+#[component]
+pub fn season_switcher_capsule(anime: anime::Client) -> impl View {
+    ui! {
+        ControlGroup(label: tr! { "zh-Hans" => "季度切换", "en" => "Seasons" }, height: 36) {
+            Row(gap: 2, padding_x: 3, align: center) {
+                ForEach(items: anime.seasons, key: id) |season| {
+                    Button(id: strip_season, label: season.title) {
+                        if season.id == anime.selected_season {
+                            Stack(variant: season_active_pill, height: 30, align: center) {
+                                Row(padding_x: 13, height: 30, align: center) {
+                                    Text(content: season.title, style: footnote)
+                                }
+                            }
+                        } else {
+                            Row(padding_x: 13, height: 30, align: center) {
+                                Text(content: season.title, style: footnote, emphasis: secondary)
+                            }
+                        }
+                    } => anime.select_season(season.id)
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn desktop_details_film(anime: anime::Client, #[session] draft: AnimeDraft) -> impl View {
+    ui! {
+        Column(gap: 0, appear: detail_film_in) {
+            Row(gap: 12, align: center, appear: fade) {
+                Spacer
+                ControlGroup(label: tr! { "zh-Hans" => "剧集翻页", "en" => "Page episodes" }, height: 36) {
+                    IconButton(id: film_back, icon: "chevron.left", label: tr! { "zh-Hans" => "上一页", "en" => "Previous" }) => draft.episode.set(anime.first_episode)
+                    IconButton(id: film_on, icon: "chevron.right", label: tr! { "zh-Hans" => "下一页", "en" => "Next" }) => draft.episode.set(anime.last_episode)
+                    IconButton(id: film_list, icon: "list.bullet", label: tr! { "zh-Hans" => "剧集列表", "en" => "Episodes" }) => anime.show_episode_list(true)
+                }
+            }
+            Canvas(height: 4)
+            // Only a mouse, which cannot drag it, gets a scroll bar.
+            ScrollView(axis: horizontal, snap: start, position: draft.episode, indicators: mouse) {
+                Row(gap: 26, padding_y: 16) {
+                    ForEach(items: anime.episodes, key: id) |episode| {
+                        film_entry(anime: anime, episode: episode)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Season-boundary vertical marker + episode cell for merged multi-season view.
+#[component]
+pub fn film_entry(anime: anime::Client, episode: anime::Episode) -> impl View {
+    ui! {
+        Row(gap: 18, align: top) {
+            if episode.season_marker != "" {
+                Row(gap: 7, align: top) {
+                    Canvas(width: 2, height: if window.compact { 166.0 } else { 184.0 }) {
+                        Shape(kind: capsule, fill: text.secondary)
+                    }
+                    Text(content: episode.season_marker, style: caption2, emphasis: secondary)
+                }
+            }
+            film_cell(anime: anime, episode: episode)
+        }
+    }
+}
+
+#[component]
+pub fn film_cell_thumb(episode: anime::Episode) -> impl View {
+    ui! {
+        if episode.pictured {
+            Stack(align: bottom_leading) {
+                Image(source: episode.still, width: if window.compact { 220.0 } else { 252.0 }, height: if window.compact { 124.0 } else { 142.0 }, fit: cover, label: episode.title)
+                Rail {
+                    Canvas(from: 0, to: episode.progress, height: 4) {
+                        Shape(kind: rect, fill: text.primary)
+                    }
+                }
+            }
+        } else {
+            Stack(align: center) {
+                Canvas(width: if window.compact { 220.0 } else { 252.0 }, height: if window.compact { 124.0 } else { 142.0 }) {
+                    Shape(kind: rect, fill: fill.subtle)
+                }
+                Text(content: episode.numeral, style: large_title, emphasis: tertiary)
             }
         }
     }
@@ -607,45 +887,31 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
 #[component]
 pub fn film_cell(anime: anime::Client, episode: anime::Episode) -> impl View {
     ui! {
-        Column(gap: 0, width: 220) {
+        Column(gap: 0, width: if window.compact { 220.0 } else { 252.0 }) {
             Stack(align: top_trailing) {
-            Button(id: episode_cell, label: episode.title, variant: film) {
-                if episode.pictured {
-                    Stack(align: bottom_leading) {
-                        Image(source: episode.still, width: 220, height: 124, fit: cover, label: episode.title)
-                        Rail {
-                            Canvas(from: 0, to: episode.progress, height: 4) {
-                                Shape(kind: rect, fill: accent)
-                            }
-                        }
-                    }
-                } else {
-                    Stack(align: center) {
-                        Canvas(width: 220, height: 124) {
-                            Shape(kind: rect, fill: fill.subtle)
-                        }
-                        Text(content: episode.numeral, style: large_title, emphasis: tertiary)
-                    }
-                }
-            } => anime.play_episode(episode.id)
+            if anime.hover_glow {
+                Button(id: episode_cell_glow, label: episode.title, variant: film, glow: 1, glow_opacity: 0.35) {
+                    film_cell_thumb(episode: episode)
+                } => anime.play_episode(episode.id)
+            } else {
+                Button(id: episode_cell, label: episode.title, variant: film) {
+                    film_cell_thumb(episode: episode)
+                } => anime.play_episode(episode.id)
+            }
             // The plugin that marks single episodes turns these on.
             if anime.episode_marking {
                 Row(gap: 0, padding: 6) {
                     if episode.watched {
-                        IconButton(id: mark_unwatched, icon: "checkmark.circle", label: tr! { "zh-Hans" => "标记为未看", "en" => "Mark as not watched" }, prominence: prominent) => anime.mark_episode(episode.id, false)
+                        IconButton(id: mark_unwatched, icon: "checkmark.circle", label: tr! { "zh-Hans" => "标记为未看", "en" => "Mark as not watched" }) => anime.mark_episode(episode.id, false)
                     } else {
-                        IconButton(id: mark_watched, icon: "circle", label: tr! { "zh-Hans" => "标记为已看", "en" => "Mark as watched" }, prominence: prominent) => anime.mark_episode(episode.id, true)
+                        IconButton(id: mark_watched, icon: "circle", label: tr! { "zh-Hans" => "标记为已看", "en" => "Mark as watched" }) => anime.mark_episode(episode.id, true)
                     }
                 }
             }
             }
             // `.et` and `.es`: the title's 14 / 19 and the caption's 11.5 / 15.
             Canvas(height: 8)
-            if episode.next {
-                Text(content: episode.title, style: headline, mark: accent, lines: 1, line_height: 19)
-            } else {
-                Text(content: episode.title, style: headline, lines: 1, line_height: 19)
-            }
+            Text(content: episode.title, style: headline, lines: 1, line_height: 19)
             Row(gap: 4, align: center) {
                 Text(content: episode.note, style: caption, emphasis: secondary, line_height: 15)
                 if episode.watched {
@@ -676,7 +942,9 @@ pub fn tag_chip(#[content] name: String) -> impl View {
 pub fn new_page(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         if anime.opened != "" && anime.opened_from_schedule && !window.unfolded && (window.compact || window.tv) {
-            details(app: app, anime: anime)
+            Stack(appear: detail_in, disappear: detail_out) {
+                details(app: app, anime: anime)
+            }
         } else if window.compact || window.medium {
             ScrollView(appear: page_in) {
                 calendar_page(app: app, anime: anime)
@@ -870,7 +1138,7 @@ pub fn calendar_rows(anime: anime::Client, day: anime::BroadcastDay) -> impl Vie
                                 Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: headline, lines: 1, line_height: if window.tv { 22 } else { 19 })
                             }
                         }
-                        Image(source: show.poster, width: 58, height: 87, fit: cover, corner: poster)
+                        Image(source: show.poster, width: 58, height: 87, fit: cover, corner: poster, hero: poster, hero_key: show.id)
                         Column(gap: 0) {
                             Text(content: show.title, style: headline, lines: 1, line_height: if window.tv { 22 } else { 19 })
                             if show.aired {
@@ -1048,7 +1316,12 @@ pub fn details_wash(anime: anime::Client) -> impl View {
             if anime.show.backdrop.url != "" {
                 Image(source: anime.show.backdrop, fit: cover, appear: fade)
                 Canvas {
-                    Shape(kind: rect, fill: surface.canvas, opacity: 0.32)
+                    Shape(kind: rect, fill: surface.canvas, opacity: 0.2)
+                }
+                Rail(axis: horizontal) {
+                    Canvas(from: 0, to: 0.62) {
+                        Shape(kind: rect, fill: surface.canvas, fade: right, opacity: 0.56)
+                    }
                 }
             } else {
                 Canvas {
@@ -1056,11 +1329,8 @@ pub fn details_wash(anime: anime::Client) -> impl View {
                 }
             }
             Rail(axis: vertical) {
-                Canvas(from: 0, to: 0.3) {
-                    Shape(kind: rect, fill: surface.canvas, fade: down)
-                }
-                Canvas(from: 0.42, to: 1) {
-                    Shape(kind: rect, fill: surface.canvas, fade: up)
+                Canvas(from: 0.58, to: 1) {
+                    Shape(kind: rect, fill: surface.canvas, fade: up, opacity: 0.88)
                 }
             }
         }
@@ -1177,7 +1447,15 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                 Column(gap: 0, padding_x: 16) {
                     Canvas(height: 8)
                     Row(gap: 16, align: top) {
-                        Image(source: anime.show.poster, width: 118, height: 177, fit: cover, corner: poster, label: anime.show.title)
+                        if anime.hover_glow {
+                            Stack(variant: detail_poster, width: 118, height: 177, glow: 1, glow_opacity: 0.35) {
+                                Image(source: anime.show.poster, width: 118, height: 177, fit: cover, corner: poster, label: anime.show.title, hero: poster, hero_key: anime.hero_id)
+                            }
+                        } else {
+                            Stack(variant: detail_poster, width: 118, height: 177) {
+                                Image(source: anime.show.poster, width: 118, height: 177, fit: cover, corner: poster, label: anime.show.title, hero: poster, hero_key: anime.hero_id)
+                            }
+                        }
                         // Use the space left by the poster, including narrow
                         // phones and foldable columns, not a prototype width.
                         Column(gap: 0) {
@@ -1206,32 +1484,23 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                         }
                     }
                     Canvas(height: 16)
-                    Button(id: phone_watch, label: anime.next, icon: "play.fill", prominence: prominent, shape: capsule, height: 42, width: fill, variant: phone_main) => anime.play_episode(anime.next_episode)
-                    Canvas(height: 11)
                     Row(gap: 10, align: center) {
-                        Menu(id: phone_status, label: anime.show.status, icon: "heart", shape: capsule, height: 32) {
-                            MenuItem(id: want, label: tr! { "zh-Hans" => "想看", "en" => "Want to Watch" }) => anime.set_status(WatchStatus::Want)
-                            MenuItem(id: watching_now, label: tr! { "zh-Hans" => "在看", "en" => "Watching" }) => anime.set_status(WatchStatus::Watching)
-                            MenuItem(id: watched, label: tr! { "zh-Hans" => "看过", "en" => "Watched" }) => anime.set_status(WatchStatus::Watched)
-                            MenuItem(id: dropped, label: tr! { "zh-Hans" => "抛弃", "en" => "Dropped" }) => anime.set_status(WatchStatus::Dropped)
-                        }
-                        if anime.can_rate {
-                            Button(id: phone_rate, label: anime.my_score, icon: "star", shape: capsule, height: 32) => anime.show_rating(true)
-                        }
-                        if anime.can_review {
-                            Button(id: phone_review, label: tr! { "zh-Hans" => "写评价", "en" => "Review" }, icon: "note.text", shape: capsule, height: 32) => anime.show_review(true)
-                        }
-                        Spacer
+                        Button(id: phone_watch, label: anime.next, icon: "play.fill", shape: capsule, height: 36, width: fill) => anime.play_episode(anime.next_episode)
+                        detail_action_capsule(anime: anime)
                     }
                     Canvas(height: 6)
                     sync_status(anime: anime)
                     Canvas(height: 14)
-                    Text(content: anime.show.summary, font_size: 13, line_height: 18, lines: 3)
+                    Text(content: anime.show.summary, font_size: 13, line_height: 18, lines: 5)
                     detail_fetch_status(anime: anime)
-                    Canvas(height: 34)
-                    Row(gap: 10, align: baseline) {
-                        episode_heading(anime: anime)
+                    Canvas(height: 24)
+                    Row(gap: 10, align: center) {
                         Spacer
+                        ControlGroup(label: tr! { "zh-Hans" => "剧集翻页", "en" => "Page episodes" }, height: 36) {
+                            IconButton(id: phone_film_back, icon: "chevron.left", label: tr! { "zh-Hans" => "上一页", "en" => "Previous" }) => draft.episode.set(anime.first_episode)
+                            IconButton(id: phone_film_on, icon: "chevron.right", label: tr! { "zh-Hans" => "下一页", "en" => "Next" }) => draft.episode.set(anime.last_episode)
+                            IconButton(id: phone_film_list, icon: "list.bullet", label: tr! { "zh-Hans" => "剧集列表", "en" => "Episodes" }) => anime.show_episode_list(true)
+                        }
                     }
                     Canvas(height: 6)
                 }
@@ -1240,15 +1509,11 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                 ScrollView(axis: horizontal, snap: start, position: draft.episode, indicators: mouse) {
                     Row(gap: 30, padding_x: 16, padding_y: 21.5) {
                         ForEach(items: anime.episodes, key: id) |episode| {
-                            film_cell(anime: anime, episode: episode)
+                            film_entry(anime: anime, episode: episode)
                         }
                     }
                 }
-                Column(gap: 0, padding_x: 16) {
-                    Canvas(height: 18)
-                    detail_information(anime: anime)
-                    Canvas(height: 32)
-                }
+                Canvas(height: 32)
             }
             }
         }
@@ -1265,73 +1530,11 @@ pub fn detail_kind(anime: anime::Client) -> impl View {
             } else {
                 Text(content: tr! { "zh-Hans" => "剧集", "en" => "Series" }, style: caption, emphasis: secondary)
             }
+            if anime.selected_season_title != "" {
+                Text(content: anime.selected_season_title, style: caption, emphasis: secondary)
+            }
             if anime.show.has_premiere {
                 Text(content: tr! { "zh-Hans" => "{premiere, date, y 年 M 月}", "en" => "{premiere, date, MMM y}"; premiere: anime.show.premiere }, style: caption, emphasis: secondary)
-            }
-        }
-    }
-}
-
-/// Season identity is distinct from an episode's display number, including S00.
-#[component]
-pub fn episode_heading(anime: anime::Client) -> impl View {
-    ui! {
-        Row(gap: 10, align: center) {
-            if anime.show.movie {
-                Text(content: tr! { "zh-Hans" => "影片", "en" => "Film" }, style: title3)
-            } else {
-                if anime.selected_season != "" {
-                    ScrollView(axis: horizontal, indicators: mouse) {
-                        Row(gap: 8) {
-                            ForEach(items: anime.seasons, key: id) |season| {
-                                if anime.selected_season == season.id {
-                                    Button(id: selected_season, label: season.title, prominence: prominent) => anime.select_season(season.id)
-                                } else {
-                                    Button(id: select_season, label: season.title) => anime.select_season(season.id)
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    Text(content: tr! { "zh-Hans" => "剧集", "en" => "Episodes" }, style: title3)
-                }
-                if anime.show.watched > 0 {
-                    Text(content: tr! { "zh-Hans" => "已看 {watched} 集", "en" => "{watched} watched"; watched: anime.show.watched }, style: caption, emphasis: secondary)
-                }
-            }
-        }
-    }
-}
-
-/// Shared by the phone, desktop and television details page.
-#[component]
-pub fn detail_information(anime: anime::Client, #[session] draft: AnimeDraft) -> impl View {
-    ui! {
-        Column(gap: 16) {
-            Row(gap: 10, align: center) {
-                Row(width: if window.tv { 220 } else { 160 }) {
-                    Picker(id: information_tab, label: tr! { "zh-Hans" => "简介与评论", "en" => "About and comments" }, value: draft.tab, style: segmented, label_hidden: true)
-                }
-                Spacer
-                if anime.can_map {
-                    Button(id: provider_links, label: tr! { "zh-Hans" => "关联", "en" => "Links" }, icon: "link", prominence: plain) => anime.show_mappings(true)
-                }
-                if draft.tab == DetailTab::Comments {
-                    Button(id: refresh_reviews, label: tr! { "zh-Hans" => "刷新", "en" => "Refresh" }, enabled: !anime.comments_loading, prominence: plain) => anime.refresh_comments()
-                }
-            }
-            if draft.tab == DetailTab::About {
-                if window.compact {
-                    Text(content: anime.show.summary, font_size: 13, line_height: 18)
-                } else if window.medium {
-                    Text(content: anime.show.summary)
-                } else {
-                    Column(width: 640) {
-                        Text(content: anime.show.summary)
-                    }
-                }
-            } else {
-                review_section(anime: anime)
             }
         }
     }
@@ -1341,9 +1544,7 @@ pub fn detail_information(anime: anime::Client, #[session] draft: AnimeDraft) ->
 pub fn detail_fetch_status(anime: anime::Client) -> impl View {
     ui! {
         Column(gap: 8) {
-            if anime.details_loading {
-                Text(content: tr! { "zh-Hans" => "正在加载详情…", "en" => "Loading details…" }, style: caption, emphasis: secondary)
-            } else if anime.details_failed {
+            if anime.details_failed {
                 Text(content: anime.details_error, style: caption, emphasis: secondary)
                 Button(id: retry_details, label: tr! { "zh-Hans" => "重试", "en" => "Retry" }, icon: "arrow.triangle.2.circlepath") => anime.refresh_details()
             }

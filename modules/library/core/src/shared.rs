@@ -452,7 +452,10 @@ mod tests {
         assert_eq!(file.name, "show - 02.mkv");
         let entries = engine.db.entries(Some(source));
         let address = entries.iter().find(|entry| entry.key == file.key).unwrap();
-        assert_eq!(address.url, format!("{base}/api/media/local/share/episodes/abc/stream"));
+        assert_eq!(
+            address.url,
+            format!("{base}/api/media/local/share/episodes/abc/stream")
+        );
         assert_eq!(engine.state.sources[0].unmatched, 1);
         assert_eq!(engine.state.unmatched_count, 1);
         assert!(!engine.state.folder.can_batch);

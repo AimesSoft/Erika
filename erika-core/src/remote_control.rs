@@ -139,7 +139,10 @@ impl ErikaEngine {
             "danmaku.opacity" => self.danmaku_number("opacity", number),
             "subtitle.activeTrackIndex" => self.select_subtitle(number as i64),
             "audio.activeTrackIndex" => self.select_audio(number as i64),
-            _ => Err(CommandError::new("unknown_key", format!("unknown key {key}"))),
+            _ => Err(CommandError::new(
+                "unknown_key",
+                format!("unknown key {key}"),
+            )),
         }
     }
 
@@ -162,7 +165,10 @@ impl ErikaEngine {
                 let key = args["key"].as_str().unwrap_or_default().to_string();
                 self.control_parameter(&key, &args["value"])
             }
-            _ => Err(CommandError::new("unknown_command", format!("unknown command {command}"))),
+            _ => Err(CommandError::new(
+                "unknown_command",
+                format!("unknown command {command}"),
+            )),
         }
     }
 
@@ -173,10 +179,8 @@ impl ErikaEngine {
         let answer = if action == "fallback_font" {
             kernel::page_font().map_or(Value::Null, |path| json!({ "path": path }))
         } else if action == "command" {
-            let result = self.control_command(
-                args["command"].as_str().unwrap_or_default(),
-                &args["args"],
-            );
+            let result =
+                self.control_command(args["command"].as_str().unwrap_or_default(), &args["args"]);
             let (success, message) = match result {
                 Ok(()) => (true, "ok".to_string()),
                 Err(error) => (false, format!("执行失败: {}", error.message)),

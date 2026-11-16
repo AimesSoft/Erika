@@ -4,8 +4,7 @@
 //! at (103, 64) 1074 × 604 in the 1280 × 800 window and grows into the
 //! full-window player when opened; what played last lists under it.
 use crate::phone::{
-    PhoneSettings, phone_mini_player, phone_mini_player_props, phone_settings,
-    phone_settings_props,
+    PhoneSettings, phone_mini_player, phone_mini_player_props, phone_settings, phone_settings_props,
 };
 use crate::{AppWindows, ErikaDraft};
 use bern::prelude::*;

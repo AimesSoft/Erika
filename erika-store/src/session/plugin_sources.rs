@@ -17,10 +17,15 @@ pub(super) struct Directory {
 }
 impl State {
     pub(super) fn register_source(
-        &mut self, owner: &str, descriptor: &Descriptor, added: i64,
+        &mut self,
+        owner: &str,
+        descriptor: &Descriptor,
+        added: i64,
     ) -> Result<(i64, bool)> {
         descriptor.validate(owner)?;
-        let old = self.plugin_sources.iter()
+        let old = self
+            .plugin_sources
+            .iter()
             .find(|(_, d)| d.owner == owner && d.descriptor.id == descriptor.id)
             .map(|(id, _)| *id);
         if let Some(id) = old {
@@ -29,7 +34,9 @@ impl State {
                 return Err(Error::conflict("同一来源不能更换服务器身份"));
             }
             d.descriptor = descriptor.clone();
-            let source = self.sources.get_mut(&id)
+            let source = self
+                .sources
+                .get_mut(&id)
                 .ok_or_else(|| Error::conflict("来源已删除"))?;
             source.name = descriptor.name.clone();
             source.content = descriptor.content.clone();
@@ -40,11 +47,18 @@ impl State {
         let mut source = descriptor.portable(owner);
         source.added = added;
         self.sources.insert(id, source);
-        self.plugin_sources.insert(id, Directory {
-            owner: owner.into(), descriptor: descriptor.clone(),
-            generation: String::new(), scan: None,
-            pages: BTreeMap::new(), staged: BTreeMap::new(), items: BTreeMap::new(),
-        });
+        self.plugin_sources.insert(
+            id,
+            Directory {
+                owner: owner.into(),
+                descriptor: descriptor.clone(),
+                generation: String::new(),
+                scan: None,
+                pages: BTreeMap::new(),
+                staged: BTreeMap::new(),
+                items: BTreeMap::new(),
+            },
+        );
         Ok((id, true))
     }
     fn owned_source(&self, owner: &str, source: i64) -> Result<&Directory> {
@@ -83,7 +97,8 @@ impl Db {
         }))
     }
     pub fn plugin_register_source(&self, owner: &str, descriptor: &Descriptor) -> Result<i64> {
-        self.put_source(&descriptor.portable(owner)).map(|(id, _)| id)
+        self.put_source(&descriptor.portable(owner))
+            .map(|(id, _)| id)
     }
     pub fn plugin_begin_scan(&self, owner: &str, source: i64) -> Result<Scan> {
         self.edit(|s| {

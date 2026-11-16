@@ -109,11 +109,27 @@ impl ProviderRef {
         value.validate()?;
         Ok(value)
     }
+    /// TMDB episode-group season node (`24`-character lowercase hex ObjectId).
+    pub fn tmdb_group_season(id: &str) -> Result<Self> {
+        let normalized = id.trim().to_ascii_lowercase();
+        if !is_tmdb_group_id(&normalized) {
+            return Err(Error::invalid("TMDB剧集组季标识不正确"));
+        }
+        let value = Self {
+            provider: Provider::Tmdb,
+            scope: String::new(),
+            kind: Kind::Season,
+            id: normalized,
+        };
+        value.validate()?;
+        Ok(value)
+    }
     pub fn validate(&self) -> Result<()> {
         if self.id.is_empty()
             || self.id.len() > 256
             || self.scope.len() > 256
             || self.id.chars().any(char::is_control)
+            || self.scope.len() > 256
             || self.scope.chars().any(char::is_control)
         {
             return Err(Error::invalid("外部媒体标识不正确"));
@@ -128,16 +144,26 @@ impl ProviderRef {
         if matches!(self.provider, Provider::Misaka | Provider::Jellyfin) && self.scope.is_empty() {
             return Err(Error::invalid("远程标识缺少服务器实例"));
         }
-        if self.provider == Provider::Tmdb
-            && (!matches!(
+        if self.provider == Provider::Tmdb {
+            let valid_kind = matches!(
                 self.kind,
                 Kind::Tv | Kind::Movie | Kind::Season | Kind::Episode
-            ) || self.id.parse::<u64>().ok().filter(|id| *id > 0).is_none())
-        {
-            return Err(Error::invalid("TMDB标识必须有正确类型和正整数ID"));
+            );
+            let numeric = self.id.parse::<u64>().ok().filter(|id| *id > 0).is_some();
+            let group_season = self.kind == Kind::Season && is_tmdb_group_id(&self.id);
+            if !valid_kind || (!numeric && !group_season) {
+                return Err(Error::invalid("TMDB标识必须有正确类型和正整数ID"));
+            }
         }
         Ok(())
     }
+}
+
+pub fn is_tmdb_group_id(value: &str) -> bool {
+    value.len() == 24
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -171,7 +197,9 @@ pub struct MediaNode {
 impl MediaNode {
     /// Keep cached details when a partial refresh supplies only a title.
     pub fn retain_metadata(&mut self, previous: &Self) {
-        if self.reference != previous.reference { return; }
+        if self.reference != previous.reference {
+            return;
+        }
         if self.overview.is_empty() {
             self.overview.clone_from(&previous.overview);
         }

@@ -207,6 +207,6 @@ macro_rules! contract {
         }
     }};
 }
-#[cfg(not(target_arch="wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
 contract!(sqlite, crate::Db);
 contract!(browser, crate::session::Db);

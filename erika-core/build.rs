@@ -47,7 +47,12 @@ fn main() {
             println!("cargo:rerun-if-changed={}", plugin.display());
             let package = out.join(format!("{id}.epk"));
             if pack(&plugin, &package).is_ok() {
-                writeln!(list, "    ({id:?}, include_bytes!({:?})),", package.display().to_string()).unwrap();
+                writeln!(
+                    list,
+                    "    ({id:?}, include_bytes!({:?})),",
+                    package.display().to_string()
+                )
+                .unwrap();
             }
         }
     }
@@ -91,13 +96,20 @@ fn pack(plugin: &Path, package: &Path) -> std::io::Result<()> {
 fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, PathBuf)>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
-        if path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.')) {
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+        {
             continue;
         }
         if path.is_dir() {
             collect(root, &path, files)?;
         } else {
-            let name = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            let name = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
             files.push((name, path));
         }
     }

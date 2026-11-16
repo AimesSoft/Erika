@@ -163,8 +163,13 @@ pub fn merge(base: Option<&State>, remote: &State, local: &State) -> Result<Stat
                     node.retain_metadata(&decode(previous)?);
                 }
             }
-            let Value::Map(fields) = value else { return Err(error()) };
-            fields.insert("data".into(), Value::from_json(&serde_json::to_value(node).map_err(|_| error())?));
+            let Value::Map(fields) = value else {
+                return Err(error());
+            };
+            fields.insert(
+                "data".into(),
+                Value::from_json(&serde_json::to_value(node).map_err(|_| error())?),
+            );
         }
     }
     validate(&merged)?;

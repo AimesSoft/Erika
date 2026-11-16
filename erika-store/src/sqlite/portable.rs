@@ -102,13 +102,18 @@ impl Db {
         let result = if let Some((owner, descriptor)) = descriptor {
             super::plugin_sources::register(&tx, &owner, &descriptor, source.added)?
         } else {
-            let known: Option<i64> = tx.query_row(
-                "SELECT id FROM source WHERE kind=?1 AND location=?2 AND id!=?3",
-                params![source.kind, source.location, OPENED], |row| row.get(0),
-            ).optional()?;
+            let known: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM source WHERE kind=?1 AND location=?2 AND id!=?3",
+                    params![source.kind, source.location, OPENED],
+                    |row| row.get(0),
+                )
+                .optional()?;
             if let Some(id) = known {
-                tx.execute("UPDATE source SET name=?2,content=?3 WHERE id=?1",
-                    params![id, source.name, source.content])?;
+                tx.execute(
+                    "UPDATE source SET name=?2,content=?3 WHERE id=?1",
+                    params![id, source.name, source.content],
+                )?;
                 (id, false)
             } else {
                 tx.execute(
@@ -239,26 +244,34 @@ impl Db {
     }
 
     pub fn put_link(&self, link: &Link) {
-        logged((|| {
-            let file = self.file_of(&link.file)?;
-            self.conn.execute(
+        logged(
+            (|| {
+                let file = self.file_of(&link.file)?;
+                self.conn.execute(
                 "UPDATE file SET episode_id=(SELECT id FROM episode WHERE dandanplay_id=?2), matched_by=?3
                  WHERE id=?1 AND (matched_by IS NULL OR matched_by='auto')
                  AND NOT EXISTS (SELECT 1 FROM file_binding WHERE file_id=?1)
                  AND (?2 IS NULL OR EXISTS (SELECT 1 FROM episode WHERE dandanplay_id=?2))",
                 params![file, link.episode, link.matched_by],
             )
-        })(), "link a synced provider episode");
+            })(),
+            "link a synced provider episode",
+        );
     }
 
     pub fn remove_link(&self, key: &FileKey) {
-        logged((|| {
-            let file = self.file_of(key)?;
-            self.conn.execute(
-                "UPDATE file SET episode_id=NULL, matched_by=NULL WHERE id=?1
+        logged(
+            (|| {
+                let file = self.file_of(key)?;
+                self.conn.execute(
+                    "UPDATE file SET episode_id=NULL, matched_by=NULL WHERE id=?1
                  AND (matched_by IS NULL OR matched_by='auto')
-                 AND NOT EXISTS (SELECT 1 FROM file_binding WHERE file_id=?1)", [file])
-        })(), "unlink a synced provider episode");
+                 AND NOT EXISTS (SELECT 1 FROM file_binding WHERE file_id=?1)",
+                    [file],
+                )
+            })(),
+            "unlink a synced provider episode",
+        );
     }
 
     pub fn portable_progress(&self) -> Vec<Progress> {

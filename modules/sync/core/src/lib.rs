@@ -124,9 +124,17 @@ fn shown_time(unix: i64, offset: i64) -> String {
 
 /// Everything this device keeps, as one export file. With a passphrase
 /// the accounts come too, sealed with its key under a new salt.
-pub fn export(db: &Db, store: &Store, vault: &dyn Vault, keys: &mut Keys, device: &str) -> Result<Vec<u8>, String> {
+pub fn export(
+    db: &Db,
+    store: &Store,
+    vault: &dyn Vault,
+    keys: &mut Keys,
+    device: &str,
+) -> Result<Vec<u8>, String> {
     let key = keys.create();
-    let state = Device::new(db, store, vault, Scope::Export).collect(key.as_ref()).map_err(|e| e.message)?;
+    let state = Device::new(db, store, vault, Scope::Export)
+        .collect(key.as_ref())
+        .map_err(|e| e.message)?;
     let mut document = Document::new(Kind::Export)
         .with_head("created", Value::Int(erika_store::now()))
         .with_head("device", Value::text(device))
@@ -199,7 +207,10 @@ fn parts(state: &format::State, accounts: i64, extensions: i64) -> Vec<SyncPart>
         ),
         (SyncKind::Accounts, accounts),
         (SyncKind::Sources, count(local::SOURCES)),
-        (SyncKind::Links, count(catalog::BINDINGS) + count(catalog::DANMAKU) + count(catalog::LINKS)),
+        (
+            SyncKind::Links,
+            count(catalog::BINDINGS) + count(catalog::DANMAKU) + count(catalog::LINKS),
+        ),
         (SyncKind::Progress, count(local::PROGRESS)),
         (SyncKind::Recents, count(local::RECENTS)),
         (SyncKind::Watched, count(catalog::WATCHED)),
@@ -491,7 +502,11 @@ impl SyncEngine {
             // Count records without serializing their private payloads or
             // asking the credential store just to paint this overview.
             let extensions = db.extensions().len() as i64;
-            Done::Parts(state.map(|state| parts(&state, accounts, extensions)).map_err(|e| e.message))
+            Done::Parts(
+                state
+                    .map(|state| parts(&state, accounts, extensions))
+                    .map_err(|e| e.message),
+            )
         });
     }
 
@@ -758,11 +773,11 @@ impl sync::Commands for SyncEngine {
                 &device,
             );
             let path = folder.join(export_name(bern::date::now()));
-            Done::Exported(
-                bytes.and_then(|bytes| std::fs::write(&path, bytes)
+            Done::Exported(bytes.and_then(|bytes| {
+                std::fs::write(&path, bytes)
                     .map(|()| path.display().to_string())
-                    .map_err(|error| format!("无法写入 {}：{error}", path.display()))),
-            )
+                    .map_err(|error| format!("无法写入 {}：{error}", path.display()))
+            }))
         });
         Ok(())
     }

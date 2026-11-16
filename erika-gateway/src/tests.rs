@@ -233,10 +233,18 @@ fn each_device_keeps_its_own_answer_and_others_hear_the_most_agreed() {
         device: "owner".into(),
         trusted: true,
     };
-    store.confirm(MD5, 1, &device("a"), "a.mkv", &binding(10_001)).unwrap();
-    store.confirm(MD5, 1, &device("a"), "a.mkv", &binding(10_001)).unwrap();
-    store.confirm(MD5, 1, &device("b"), "a.mkv", &binding(10_001)).unwrap();
-    store.confirm(MD5, 1, &device("c"), "a.mkv", &binding(10_003)).unwrap();
+    store
+        .confirm(MD5, 1, &device("a"), "a.mkv", &binding(10_001))
+        .unwrap();
+    store
+        .confirm(MD5, 1, &device("a"), "a.mkv", &binding(10_001))
+        .unwrap();
+    store
+        .confirm(MD5, 1, &device("b"), "a.mkv", &binding(10_001))
+        .unwrap();
+    store
+        .confirm(MD5, 1, &device("c"), "a.mkv", &binding(10_003))
+        .unwrap();
     // Confirming again is one vote; c keeps its own answer.
     let heard = |who: &str| {
         let found = store.find(MD5, 1, who).unwrap();
@@ -246,7 +254,9 @@ fn each_device_keeps_its_own_answer_and_others_hear_the_most_agreed() {
     assert_eq!(heard("c"), (10_003, 3, 1));
     assert_eq!(heard("d"), (10_001, 1, 2));
     // The owner's word goes above any number of devices.
-    store.confirm(MD5, 1, &owner, "a.mkv", &binding(10_003)).unwrap();
+    store
+        .confirm(MD5, 1, &owner, "a.mkv", &binding(10_003))
+        .unwrap();
     assert_eq!(heard("d"), (10_003, 3, 2));
     assert_eq!(heard("a"), (10_001, 1, 2));
     assert_eq!(store.count(), 1);
@@ -264,7 +274,14 @@ async fn shows_are_given_by_their_lasting_ids_with_every_episode_seen() {
     let api = format!("{address}/public/api/v2");
     let details = |id: &'static str| {
         let url = format!("{api}/bangumi/{id}");
-        async move { reqwest::get(url).await.unwrap().json::<Value>().await.unwrap() }
+        async move {
+            reqwest::get(url)
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
     };
     let titles = |answer: &Value| -> Vec<String> {
         answer
@@ -272,7 +289,12 @@ async fn shows_are_given_by_their_lasting_ids_with_every_episode_seen() {
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|episode| episode.get("episodeTitle").and_then(Value::as_str).map(str::to_string))
+            .filter_map(|episode| {
+                episode
+                    .get("episodeTitle")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
             .collect()
     };
     // Before any search, Misaka lists only the episode it has danmaku of.
@@ -285,7 +307,10 @@ async fn shows_are_given_by_their_lasting_ids_with_every_episode_seen() {
     // Asked again by that id, every episode seen is there.
     let again = details("A137").await;
     assert_eq!(titles(&again), ["第1集", "第2集"]);
-    assert_eq!(again.pointer("/bangumi/imageUrl"), Some(&json!("https://img/137.jpg")));
+    assert_eq!(
+        again.pointer("/bangumi/imageUrl"),
+        Some(&json!("https://img/137.jpg"))
+    );
     assert_eq!(again.pointer("/bangumi/type"), Some(&json!("tvseries")));
     // A show Misaka does not have stays unknown.
     assert_eq!(details("136").await.get("bangumi"), Some(&Value::Null));
@@ -302,7 +327,12 @@ async fn under_the_public_key_devices_vote_for_themselves_at_a_rate() {
     let renamed = json!({ "fileName": "renamed.mkv", "fileHash": MD5, "fileSize": 100 });
     let (_, answer) = post_as(&format!("{api}/match"), Some("b"), renamed.clone()).await;
     assert_eq!(episode(&answer), Some(25_000_137_010_002));
-    post_as(&format!("{api}/match/forget"), Some("b"), json!({ "fileHash": MD5, "fileSize": 100 })).await;
+    post_as(
+        &format!("{api}/match/forget"),
+        Some("b"),
+        json!({ "fileHash": MD5, "fileSize": 100 }),
+    )
+    .await;
     let (_, answer) = post_as(&format!("{api}/match"), Some("b"), renamed.clone()).await;
     assert_eq!(episode(&answer), Some(25_000_137_010_002));
     // b has made three requests this minute: the fourth is let in, the
@@ -317,14 +347,20 @@ async fn under_the_public_key_devices_vote_for_themselves_at_a_rate() {
     // ten devices' worth, of which a and b made seven.
     let mut statuses = Vec::new();
     for n in 0..34 {
-        let (status, _) = post_as(&format!("{api}/match"), Some(&format!("new-{n}")), renamed.clone()).await;
+        let (status, _) = post_as(
+            &format!("{api}/match"),
+            Some(&format!("new-{n}")),
+            renamed.clone(),
+        )
+        .await;
         statuses.push(status);
     }
     assert_eq!(statuses.iter().filter(|status| **status == 200).count(), 33);
     assert_eq!(statuses.last(), Some(&429));
     // The owner is held to no rate.
     for _ in 0..6 {
-        let (status, _) = post_json(&format!("{address}/secret/api/v2/match"), renamed.clone()).await;
+        let (status, _) =
+            post_json(&format!("{address}/secret/api/v2/match"), renamed.clone()).await;
         assert_eq!(status, 200);
     }
 }

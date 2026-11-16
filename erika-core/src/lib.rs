@@ -10,6 +10,8 @@ mod account;
 #[cfg(feature = "bern-module-account")]
 mod bangumi;
 
+mod catalog_matching;
+mod catalog_playback;
 mod chapters;
 mod danmaku;
 mod history;
@@ -18,11 +20,9 @@ mod keys;
 mod links;
 mod markdown;
 mod matching;
-mod catalog_matching;
-mod catalog_playback;
-mod plugins;
 mod playback_preferences;
 mod player;
+mod plugins;
 mod queue;
 #[cfg(feature = "bern-module-remote")]
 mod remote_control;
@@ -480,6 +480,7 @@ impl erika::Commands for ErikaEngine {
             }
             "auto_match" => self.state.preferences.auto_match = value,
             "sync_storage" => self.state.preferences.sync_storage = value,
+            "merge_seasons" => self.state.preferences.merge_seasons = value,
             _ => {
                 return Err(CommandError::new(
                     "unknown_preference",
@@ -489,7 +490,16 @@ impl erika::Commands for ErikaEngine {
         }
         self.db
             .set_setting(&key, Some(if value { "true" } else { "false" }));
-        self.plugin_event("settingsChanged", serde_json::json!({ "key": key, "value": value }));
+        if key == "merge_seasons" {
+            #[cfg(feature = "bern-module-library")]
+            erika_library_protocol::library::calls::history_changed();
+            #[cfg(feature = "bern-module-anime")]
+            erika_anime_protocol::anime::calls::history_changed();
+        }
+        self.plugin_event(
+            "settingsChanged",
+            serde_json::json!({ "key": key, "value": value }),
+        );
         Ok(())
     }
     fn set_module(&mut self, id: String, enabled: bool) -> Result<(), CommandError> {
@@ -508,8 +518,7 @@ impl erika::Commands for ErikaEngine {
             .iter()
             .filter(|other| **other != id)
             .filter(|other| {
-                previous.iter().any(|old| old == *other)
-                    != selected.iter().any(|new| new == *other)
+                previous.iter().any(|old| old == *other) != selected.iter().any(|new| new == *other)
             })
             .map(|id| settings::feature_module(id));
         match (enabled, affected.next(), affected.next()) {
@@ -578,10 +587,20 @@ impl erika::Commands for ErikaEngine {
     fn set_plugin_text(&mut self, entry: String, value: String) -> Result<(), CommandError> {
         self.set_plugin_text_command(entry, value)
     }
-    fn set_plugin_menu_switch(&mut self, plugin: String, entry: String, value: bool) -> Result<(), CommandError> {
+    fn set_plugin_menu_switch(
+        &mut self,
+        plugin: String,
+        entry: String,
+        value: bool,
+    ) -> Result<(), CommandError> {
         self.set_plugin_menu_switch_command(plugin, entry, value)
     }
-    fn set_plugin_menu_color(&mut self, plugin: String, entry: String, color: PluginColor) -> Result<(), CommandError> {
+    fn set_plugin_menu_color(
+        &mut self,
+        plugin: String,
+        entry: String,
+        color: PluginColor,
+    ) -> Result<(), CommandError> {
         self.set_plugin_menu_color_command(plugin, entry, color)
     }
     fn dismiss_plugin_message(&mut self) -> Result<(), CommandError> {
@@ -607,7 +626,11 @@ impl erika::Commands for ErikaEngine {
     }
 
     #[cfg(feature = "bern-module-library")]
-    fn open_library_file(&mut self, source: MediaSource, title: String) -> Result<(), CommandError> {
+    fn open_library_file(
+        &mut self,
+        source: MediaSource,
+        title: String,
+    ) -> Result<(), CommandError> {
         self.open_file_named(source, Some(title), bern::current_entry());
         Ok(())
     }
@@ -756,7 +779,11 @@ impl erika::Commands for ErikaEngine {
         };
         self.start(
             without_extension(&recent.name),
-            recent.source.as_ref().map(player::source_note).unwrap_or(PlayingNote::LocalFile),
+            recent
+                .source
+                .as_ref()
+                .map(player::source_note)
+                .unwrap_or(PlayingNote::LocalFile),
             recent.still,
             progress,
         );
@@ -793,37 +820,63 @@ impl erika::Commands for ErikaEngine {
         Ok(())
     }
 
-    fn play_media(&mut self, media: String, source: MediaSource, position: f64, from_stage: bool) -> Result<(), CommandError> {
-        if !position.is_finite() || position<0. {
-            return Err(CommandError::new("invalid_time","播放位置不正确"));
+    fn play_media(
+        &mut self,
+        media: String,
+        source: MediaSource,
+        position: f64,
+        from_stage: bool,
+    ) -> Result<(), CommandError> {
+        if !position.is_finite() || position < 0. {
+            return Err(CommandError::new("invalid_time", "播放位置不正确"));
         }
-        let (file,fingerprint)=self.identify(&source);
-        let file=file.ok_or_else(||CommandError::new("unknown_file","没有这条媒体文件"))?;
-        let binding=self.db.catalog_binding(file).map_err(|e|CommandError::new(e.code,e.message))?
-            .ok_or_else(||CommandError::new("stale_binding","文件的作品关联已更改"))?;
-        let mut start=position;
+        let (file, fingerprint) = self.identify(&source);
+        let file = file.ok_or_else(|| CommandError::new("unknown_file", "没有这条媒体文件"))?;
+        let binding = self
+            .db
+            .catalog_binding(file)
+            .map_err(|e| CommandError::new(e.code, e.message))?
+            .ok_or_else(|| CommandError::new("stale_binding", "文件的作品关联已更改"))?;
+        let mut start = position;
         if !media.is_empty() {
-            let id=erika_catalog::MediaId::parse(&media).map_err(|e|CommandError::new("invalid_media",e.message))?;
-            let node=self.db.catalog_node(&id).map_err(|e|CommandError::new(e.code,e.message))?
-                .ok_or_else(||CommandError::new("unknown_media","没有这条影片或分集"))?;
-            let item=binding.items.iter().find(|i|i.media==node.id)
-                .filter(|_|binding.has_item_positions())
-                .ok_or_else(||CommandError::new("stale_binding","文件的分集关联已更改"))?;
-            let begin=item.start_seconds.unwrap_or(0.);
-            if start<begin || binding.item_end(item).is_some_and(|end|start>=end) {start=begin;}
+            let id = erika_catalog::MediaId::parse(&media)
+                .map_err(|e| CommandError::new("invalid_media", e.message))?;
+            let node = self
+                .db
+                .catalog_node(&id)
+                .map_err(|e| CommandError::new(e.code, e.message))?
+                .ok_or_else(|| CommandError::new("unknown_media", "没有这条影片或分集"))?;
+            let item = binding
+                .items
+                .iter()
+                .find(|i| i.media == node.id)
+                .filter(|_| binding.has_item_positions())
+                .ok_or_else(|| CommandError::new("stale_binding", "文件的分集关联已更改"))?;
+            let begin = item.start_seconds.unwrap_or(0.);
+            if start < begin || binding.item_end(item).is_some_and(|end| start >= end) {
+                start = begin;
+            }
         } else if binding.items.is_empty() {
-            return Err(CommandError::new("stale_binding","文件的作品关联已更改"));
+            return Err(CommandError::new("stale_binding", "文件的作品关联已更改"));
         }
-        let entering=!(self.state.playing && self.state.expanded);
-        self.start(self.source_name(&source),player::source_note(&source),no_picture(),0.);
-        if entering {self.state.player.flies_in=from_stage;self.state.player.arriving=from_stage;}
-        self.file=Some(file);
-        self.state.elapsed=start;
+        let entering = !(self.state.playing && self.state.expanded);
+        self.start(
+            self.source_name(&source),
+            player::source_note(&source),
+            no_picture(),
+            0.,
+        );
+        if entering {
+            self.state.player.flies_in = from_stage;
+            self.state.player.arriving = from_stage;
+        }
+        self.file = Some(file);
+        self.state.elapsed = start;
         self.prepare_queue(&source);
         // The caller selected a canonical chapter. Saved progress must never
         // replace its absolute timestamp (including when duration is unknown).
-        self.load(Some(source.clone()),start);
-        self.recognize(&source,fingerprint);
+        self.load(Some(source.clone()), start);
+        self.recognize(&source, fingerprint);
         Ok(())
     }
 
@@ -1085,7 +1138,9 @@ impl erika::Commands for ErikaEngine {
     }
     fn show_matching(&mut self, open: bool) -> Result<(), CommandError> {
         self.require_playing()?;
-        if open { self.capture_match_revisions()?; }
+        if open {
+            self.capture_match_revisions()?;
+        }
         self.state.matching.open = open;
         Ok(())
     }
@@ -1214,7 +1269,13 @@ impl erika::Commands for ErikaEngine {
         Ok(())
     }
     #[cfg(feature = "bern-module-account")]
-    fn submit_account_login(&mut self, bangumi: bool, user: String, password: String, captcha: String) -> Result<(), CommandError> {
+    fn submit_account_login(
+        &mut self,
+        bangumi: bool,
+        user: String,
+        password: String,
+        captcha: String,
+    ) -> Result<(), CommandError> {
         self.require_account()?;
         if bangumi && self.state.bangumi.prompt {
             self.submit_bangumi(user, password, captcha);
@@ -1245,7 +1306,12 @@ impl erika::Commands for ErikaEngine {
         Ok(())
     }
     #[cfg(feature = "bern-module-account")]
-    fn bangumi_sign_in(&mut self, email: String, password: String, captcha: String) -> Result<(), CommandError> {
+    fn bangumi_sign_in(
+        &mut self,
+        email: String,
+        password: String,
+        captcha: String,
+    ) -> Result<(), CommandError> {
         self.require_account()?;
         self.submit_bangumi(email, password, captcha);
         Ok(())
@@ -1303,7 +1369,13 @@ impl ErikaEngine {
         self.play_link_from(link, title, Vec::new(), bern::current_entry());
     }
 
-    pub(crate) fn play_link_from(&mut self, link: &str, title: String, headers: Vec<(String, String)>, entry: Option<bern::Entry>) {
+    pub(crate) fn play_link_from(
+        &mut self,
+        link: &str,
+        title: String,
+        headers: Vec<(String, String)>,
+        entry: Option<bern::Entry>,
+    ) {
         self.start(title, PlayingNote::Link, no_picture(), 0.0);
         let source = MediaSource::new(link);
         self.prepare_queue(&source);

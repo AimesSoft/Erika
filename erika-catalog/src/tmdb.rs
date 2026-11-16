@@ -9,6 +9,28 @@ use serde_json::Value;
 pub struct Work {
     pub node: MediaNode,
     pub seasons: Vec<MediaNode>,
+    /// Series-level episode dates (`last_air_date`, `last_episode_to_air`,
+    /// `next_episode_to_air`) for shows TMDB keeps inside a single season.
+    #[serde(default)]
+    pub active_dates: Vec<String>,
+    /// Original-language TMDB overview when the requested locale has none;
+    /// kept outside `node.overview` so Chinese provider summaries can take
+    /// precedence before falling back to a foreign-language synopsis.
+    #[serde(default)]
+    pub original_overview: String,
+    /// Pre-split seasons from TMDB `episode_groups` (`type == 6`, Seasons) for
+    /// anime whose primary `seasons` list merges multiple seasons into Season 1.
+    #[serde(default)]
+    pub split_seasons: Vec<Season>,
+}
+impl Work {
+    pub fn airs_in(&self, year: u16) -> bool {
+        let prefix = format!("{year}-");
+        self.seasons
+            .iter()
+            .any(|s| s.season_number.is_some_and(|n| n > 0) && s.date.starts_with(&prefix))
+            || self.active_dates.iter().any(|d| d.starts_with(&prefix))
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Season {
@@ -20,6 +42,56 @@ pub struct SearchPage {
     pub results: Vec<MediaNode>,
     pub page: u32,
     pub total_pages: u32,
+}
+
+/// Pre-resolved daily season snapshot served by the metadata gateway so clients
+/// can hydrate the entire calendar in one request instead of hundreds.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SeasonBundle {
+    #[serde(default)]
+    pub images: Option<artwork::ImageConfiguration>,
+    #[serde(default)]
+    pub items: Vec<SeasonBundleItem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SeasonBundleItem {
+    pub anime_id: i64,
+    pub work: Work,
+    #[serde(default)]
+    pub season: Option<ProviderRef>,
+    #[serde(default)]
+    pub subjects: Vec<ProviderRef>,
+    #[serde(default)]
+    pub summary: String,
+}
+impl SeasonBundleItem {
+    pub fn validate(&self) -> Result<()> {
+        if self.anime_id <= 0 {
+            return Err(Error::invalid("新番缓存条目标识不正确"));
+        }
+        self.work.node.validate()?;
+        self.work.node.validate_artwork()?;
+        for season in &self.work.seasons {
+            season.validate()?;
+            season.validate_artwork()?;
+        }
+        for split in &self.work.split_seasons {
+            split.node.validate()?;
+            split.node.validate_artwork()?;
+            for episode in &split.episodes {
+                episode.validate()?;
+                episode.validate_artwork()?;
+            }
+        }
+        if let Some(season) = &self.season {
+            season.validate()?;
+        }
+        for subject in &self.subjects {
+            subject.validate()?;
+        }
+        Ok(())
+    }
 }
 fn id(body: &Value) -> Result<u64> {
     body["id"]
@@ -144,10 +216,227 @@ pub fn parse_work(kind: Kind, expected: u64, body: &Value) -> Result<Work> {
         }
         seasons.sort_by_key(|s| s.season_number);
     }
+    let mut active_dates = Vec::new();
+    if kind == Kind::Tv {
+        for candidate in [
+            text(body, "last_air_date"),
+            text(&body["last_episode_to_air"], "air_date"),
+            text(&body["next_episode_to_air"], "air_date"),
+        ] {
+            if !candidate.is_empty() && !active_dates.contains(&candidate) {
+                active_dates.push(candidate);
+            }
+        }
+    }
     Ok(Work {
         node: work,
         seasons,
+        active_dates,
+        original_overview: String::new(),
+        split_seasons: Vec::new(),
     })
+}
+
+/// Choose a TMDB `episode_groups` entry of type `6` (`Seasons`) that splits a
+/// single-season TV entry into two or more seasons.
+pub fn choose_seasons_group(body: &Value) -> Option<String> {
+    let rows = body["results"].as_array()?;
+    rows.iter()
+        .filter(|row| {
+            row["type"].as_u64() == Some(6)
+                && row["group_count"].as_u64().unwrap_or(0) >= 2
+                && row["id"]
+                    .as_str()
+                    .is_some_and(|s| crate::is_tmdb_group_id(&s.trim().to_ascii_lowercase()))
+        })
+        .max_by_key(|row| {
+            (
+                row["episode_count"].as_u64().unwrap_or(0),
+                row["group_count"].as_u64().unwrap_or(0),
+            )
+        })
+        .and_then(|row| row["id"].as_str())
+        .map(|s| s.trim().to_ascii_lowercase())
+}
+
+impl Work {
+    /// Expand a single-regular-season anime into its real broadcast seasons
+    /// using TMDB's `/tv/episode_group/{id}` (`type == 6`) response.
+    /// Season 1 retains its numeric TMDB Season `ProviderRef` so existing links
+    /// stay valid; subsequent seasons use their immutable TMDB group IDs, and
+    /// every episode retains its numeric TMDB Episode `ProviderRef` with
+    /// season-relative numbering (`1..=N`).
+    pub fn apply_episode_group(&mut self, body: &Value) -> Result<bool> {
+        if self.node.kind != Kind::Tv || body["type"].as_u64() != Some(6) {
+            return Ok(false);
+        }
+        let Some(groups) = body["groups"].as_array() else {
+            return Ok(false);
+        };
+        let regular_groups = groups
+            .iter()
+            .filter(|g| g["order"].as_u64().is_some_and(|n| n >= 1))
+            .count();
+        if regular_groups < 2 {
+            return Ok(false);
+        }
+        let existing_s0 = self
+            .seasons
+            .iter()
+            .find(|s| s.season_number == Some(0))
+            .cloned();
+        let existing_s1 = self
+            .seasons
+            .iter()
+            .find(|s| s.season_number == Some(1))
+            .cloned();
+        let mut new_seasons = Vec::new();
+        let mut split_seasons = Vec::new();
+        let mut seen_orders = std::collections::HashSet::new();
+        let mut seen_episodes = std::collections::HashSet::new();
+
+        for grp in groups {
+            let Some(order_u64) = grp["order"].as_u64() else {
+                continue;
+            };
+            let Ok(season_no) = u32::try_from(order_u64) else {
+                continue;
+            };
+            if season_no > 1000 || !seen_orders.insert(season_no) {
+                continue;
+            }
+            let Some(ep_rows) = grp["episodes"].as_array() else {
+                continue;
+            };
+            if ep_rows.is_empty() {
+                continue;
+            }
+            let season_ref = if season_no == 0 {
+                if let Some(s0) = &existing_s0
+                    && let Some(r) = &s0.reference
+                {
+                    r.clone()
+                } else if let Some(gid) = grp["id"].as_str() {
+                    ProviderRef::tmdb_group_season(gid)?
+                } else {
+                    continue;
+                }
+            } else if season_no == 1
+                && let Some(s1) = &existing_s1
+                && let Some(r) = &s1.reference
+            {
+                r.clone()
+            } else if let Some(gid) = grp["id"].as_str() {
+                ProviderRef::tmdb_group_season(gid)?
+            } else {
+                continue;
+            };
+            let season_id = MediaId::for_ref(&season_ref);
+            let mut parsed_eps = Vec::new();
+            let mut first_date = String::new();
+            for (idx, row) in ep_rows.iter().enumerate() {
+                let Ok(ep_id) = id(row) else {
+                    continue;
+                };
+                if !seen_episodes.insert(ep_id) {
+                    continue;
+                }
+                let ep_no = (idx as u32) + 1;
+                let ep_node = node(
+                    row,
+                    ProviderRef::tmdb(Kind::Episode, ep_id)?,
+                    Some(season_id.clone()),
+                    Some(self.node.id.clone()),
+                    Some(season_no),
+                    Some(ep_no),
+                )?;
+                if first_date.is_empty() && !ep_node.date.is_empty() {
+                    first_date.clone_from(&ep_node.date);
+                }
+                parsed_eps.push(ep_node);
+            }
+            if parsed_eps.is_empty() {
+                continue;
+            }
+            let raw_name = text(grp, "name");
+            let title = if season_no == 0 {
+                existing_s0
+                    .as_ref()
+                    .map(|s| s.title.clone())
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| "特别篇".into())
+            } else if raw_name.is_empty()
+                || raw_name.eq_ignore_ascii_case(&format!("Season {season_no}"))
+            {
+                format!("第 {season_no} 季")
+            } else {
+                raw_name.clone()
+            };
+            let season_node = MediaNode {
+                id: season_id,
+                kind: Kind::Season,
+                parent: Some(self.node.id.clone()),
+                root: self.node.id.clone(),
+                season_number: Some(season_no),
+                episode_number: None,
+                original_label: raw_name,
+                title,
+                original_title: String::new(),
+                overview: if season_no == 1 {
+                    existing_s1
+                        .as_ref()
+                        .map(|s| s.overview.clone())
+                        .filter(|s| !s.trim().is_empty())
+                        .unwrap_or_else(|| text(grp, "description"))
+                } else {
+                    text(grp, "description")
+                },
+                date: first_date,
+                original_language: String::new(),
+                runtime_minutes: None,
+                reference: Some(season_ref),
+                artwork: if season_no == 1 {
+                    existing_s1
+                        .as_ref()
+                        .map(|s| s.artwork.clone())
+                        .unwrap_or_default()
+                } else if season_no == 0 {
+                    existing_s0
+                        .as_ref()
+                        .map(|s| s.artwork.clone())
+                        .unwrap_or_default()
+                } else {
+                    Artwork::default()
+                },
+                revision: 0,
+            };
+            season_node.validate()?;
+            season_node.validate_artwork()?;
+            new_seasons.push(season_node.clone());
+            split_seasons.push(Season {
+                node: season_node,
+                episodes: parsed_eps,
+            });
+        }
+        if split_seasons
+            .iter()
+            .filter(|s| s.node.season_number.is_some_and(|n| n > 0))
+            .count()
+            < 2
+        {
+            return Ok(false);
+        }
+        if !new_seasons.iter().any(|s| s.season_number == Some(0))
+            && let Some(s0) = existing_s0
+        {
+            new_seasons.push(s0);
+        }
+        new_seasons.sort_by_key(|s| s.season_number);
+        split_seasons.sort_by_key(|s| s.node.season_number);
+        self.seasons = new_seasons;
+        self.split_seasons = split_seasons;
+        Ok(true)
+    }
 }
 pub fn parse_season(work: &Work, requested: u32, body: &Value) -> Result<Season> {
     let known = work
@@ -263,5 +552,103 @@ mod tests {
     fn malformed_is_not_empty_and_wrong_identity_is_rejected() {
         assert!(parse_work(Kind::Tv, 1, &json!({"id":2,"name":"Other","seasons":[]})).is_err());
         assert!(parse_search(Kind::Tv, &json!({})).is_err());
+        let continuous = parse_work(
+            Kind::Tv,
+            9,
+            &json!({
+                "id":9,"name":"Continuous","first_air_date":"2023-10-22",
+                "last_air_date":"2026-11-06",
+                "next_episode_to_air":{"air_date":"2026-11-13"},
+                "seasons":[{"id":91,"season_number":1,"name":"第 1 季","air_date":"2023-10-22"}]
+            }),
+        )
+        .unwrap();
+        assert!(continuous.airs_in(2023));
+        assert!(continuous.airs_in(2026));
+        assert!(!continuous.airs_in(2025));
+    }
+
+    #[test]
+    fn episode_group_expands_single_season_anime_into_real_seasons() {
+        let groups_list = json!({
+            "results": [
+                {"id": "111111111111111111111111", "type": 3, "episode_count": 60, "group_count": 3},
+                {"id": "6abfdb678348fc8997c4b3fe", "type": 6, "episode_count": 60, "group_count": 3}
+            ]
+        });
+        assert_eq!(
+            choose_seasons_group(&groups_list).as_deref(),
+            Some("6abfdb678348fc8997c4b3fe")
+        );
+
+        let mut work = parse_work(
+            Kind::Tv,
+            220542,
+            &json!({
+                "id": 220542,
+                "name": "药屋少女的呢喃",
+                "original_name": "薬屋のひとりごと",
+                "original_language": "ja",
+                "seasons": [
+                    {"id": 329445, "season_number": 0, "name": "特别篇"},
+                    {"id": 329446, "season_number": 1, "name": "第 1 季", "air_date": "2023-10-22", "poster_path": "/s1.jpg"}
+                ]
+            }),
+        )
+        .unwrap();
+        let applied = work
+            .apply_episode_group(&json!({
+                "type": 6,
+                "groups": [
+                    {
+                        "id": "6533f8a10000000000000001",
+                        "name": "Season 1",
+                        "order": 1,
+                        "episodes": [{"id": 4800001, "name": "猫猫", "air_date": "2023-10-22"}]
+                    },
+                    {
+                        "id": "6533f8a10000000000000002",
+                        "name": "Season 2",
+                        "order": 2,
+                        "episodes": [{"id": 5800001, "name": "后宫", "air_date": "2025-01-10"}]
+                    },
+                    {
+                        "id": "6abfdb678348fc8997c4b3fe",
+                        "name": "Season 3",
+                        "order": 3,
+                        "episodes": [{"id": 7810328, "name": "蝗虫", "air_date": "2026-10-02"}]
+                    }
+                ]
+            }))
+            .unwrap();
+        assert!(applied);
+        assert_eq!(work.seasons.len(), 4);
+        assert_eq!(work.split_seasons.len(), 3);
+        let s1 = work
+            .seasons
+            .iter()
+            .find(|s| s.season_number == Some(1))
+            .unwrap();
+        let s3 = work
+            .seasons
+            .iter()
+            .find(|s| s.season_number == Some(3))
+            .unwrap();
+        assert_eq!(s1.reference.as_ref().unwrap().id, "329446");
+        assert_eq!(
+            s3.reference.as_ref().unwrap().id,
+            "6abfdb678348fc8997c4b3fe"
+        );
+        assert_eq!(s3.title, "第 3 季");
+        assert_eq!(s3.date, "2026-10-02");
+        let s3_eps = &work
+            .split_seasons
+            .iter()
+            .find(|s| s.node.season_number == Some(3))
+            .unwrap()
+            .episodes;
+        assert_eq!(s3_eps[0].season_number, Some(3));
+        assert_eq!(s3_eps[0].episode_number, Some(1));
+        assert_eq!(s3_eps[0].reference.as_ref().unwrap().id, "7810328");
     }
 }

@@ -112,7 +112,10 @@ fn a_document_reads_back_and_damage_is_caught() {
     assert_eq!(format::read(&newer), Err(format::FormatError::Newer(3)));
     let mut older = bytes.clone();
     older[8] = 1;
-    assert_eq!(format::read(&older), Err(format::FormatError::Incompatible(1)));
+    assert_eq!(
+        format::read(&older),
+        Err(format::FormatError::Incompatible(1))
+    );
 }
 
 #[test]
@@ -623,7 +626,8 @@ fn an_export_brings_everything_to_a_clean_device() {
         &old_vault,
         &mut keys(Some("passphrase")),
         "mac-id",
-    ).unwrap();
+    )
+    .unwrap();
     assert!(!bytes.windows(9).any(|w| w == b"token-123"));
 
     let (new_store, new_dir) = store("new");
@@ -723,7 +727,8 @@ fn an_export_without_the_passphrase_brings_all_but_the_accounts() {
         &old_vault,
         &mut keys(Some("passphrase")),
         "mac-id",
-    ).unwrap();
+    )
+    .unwrap();
     for passphrase in [None, Some("another one")] {
         let (new_store, new_dir) = store("locked-new");
         let new_db = Db::in_memory();
@@ -758,7 +763,9 @@ fn a_repository_leaves_this_devices_folders_and_files_out() {
     let db = Db::in_memory();
     let vault = MemoryVault::default();
     fill(&db, &store, &vault);
-    let state = Device::new(&db, &store, &vault, Scope::Repository).collect(None).unwrap();
+    let state = Device::new(&db, &store, &vault, Scope::Repository)
+        .collect(None)
+        .unwrap();
     assert_eq!(state[local::SOURCES].len(), 1);
     assert_eq!(
         state[local::RECENTS].keys().collect::<Vec<_>>(),

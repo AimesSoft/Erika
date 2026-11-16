@@ -11,9 +11,15 @@ impl Db {
         work: impl FnOnce(&Self) -> crate::catalog::Result<T>,
     ) -> crate::catalog::Result<T> {
         let mut state = self.state.lock().expect("session database lock poisoned");
-        let draft = Self { state: std::sync::Arc::new(std::sync::Mutex::new(state.clone())) };
+        let draft = Self {
+            state: std::sync::Arc::new(std::sync::Mutex::new(state.clone())),
+        };
         let result = work(&draft)?;
-        *state = draft.state.lock().expect("session database lock poisoned").clone();
+        *state = draft
+            .state
+            .lock()
+            .expect("session database lock poisoned")
+            .clone();
         Ok(result)
     }
     pub fn settings(&self) -> Vec<(String, String)> {
@@ -33,7 +39,9 @@ impl Db {
             if let Some((owner, descriptor)) = descriptor {
                 return s.register_source(&owner, &descriptor, source.added);
             }
-            if let Some(id) = s.sources.iter()
+            if let Some(id) = s
+                .sources
+                .iter()
                 .find(|(_, v)| v.kind == source.kind && v.location == source.location)
                 .map(|(id, _)| *id)
             {
@@ -98,7 +106,9 @@ impl Db {
                 .iter()
                 .filter_map(|(&id, (episode, matched_by))| {
                     let file = s.files.get(&id)?.clone()?;
-                    if s.catalog.bindings.contains_key(&id) { return None; }
+                    if s.catalog.bindings.contains_key(&id) {
+                        return None;
+                    }
                     Some(Link {
                         file,
                         episode: *episode,
@@ -111,15 +121,31 @@ impl Db {
     pub fn put_link(&self, link: &Link) {
         self.write(|s| {
             let file = s.file(Some(&link.file));
-            if s.catalog.bindings.contains_key(&file) || s.links.get(&file).is_some_and(|(_, kind)| matches!(kind.as_deref(), Some("manual" | "none"))) { return; }
-            if link.episode.is_some_and(|id| !s.episodes.contains_key(&id)) { return; }
-            s.links.insert(file, (link.episode, link.matched_by.clone()));
+            if s.catalog.bindings.contains_key(&file)
+                || s.links
+                    .get(&file)
+                    .is_some_and(|(_, kind)| matches!(kind.as_deref(), Some("manual" | "none")))
+            {
+                return;
+            }
+            if link.episode.is_some_and(|id| !s.episodes.contains_key(&id)) {
+                return;
+            }
+            s.links
+                .insert(file, (link.episode, link.matched_by.clone()));
         });
     }
     pub fn remove_link(&self, key: &FileKey) {
         self.write(|s| {
             let file = s.file(Some(key));
-            if !s.catalog.bindings.contains_key(&file) && !s.links.get(&file).is_some_and(|(_, kind)| matches!(kind.as_deref(), Some("manual" | "none"))) { s.links.remove(&file); }
+            if !s.catalog.bindings.contains_key(&file)
+                && !s
+                    .links
+                    .get(&file)
+                    .is_some_and(|(_, kind)| matches!(kind.as_deref(), Some("manual" | "none")))
+            {
+                s.links.remove(&file);
+            }
         });
     }
     pub fn portable_progress(&self) -> Vec<Progress> {

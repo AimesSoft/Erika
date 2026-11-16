@@ -81,11 +81,7 @@ impl ErikaEngine {
         self.media_playing = media;
         if self.catalog_playback.original.is_none() && self.catalog_playback.root.is_some() {
             let original = if let Some(source) = self.current_source() {
-                (
-                    self.source_name(source),
-                    player::source_note(source),
-                    0,
-                )
+                (self.source_name(source), player::source_note(source), 0)
             } else {
                 (
                     self.state.title.clone(),

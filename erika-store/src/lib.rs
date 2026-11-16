@@ -28,24 +28,24 @@ mod session;
 #[cfg(target_arch = "wasm32")]
 pub use session::Db;
 
-pub mod portable;
-pub mod catalog;
 pub mod account_sync;
+#[cfg(test)]
+mod account_sync_contract;
+pub mod catalog;
 pub mod catalog_context;
+mod catalog_identity;
+pub mod catalog_images;
+mod catalog_mark;
+#[cfg(test)]
+mod catalog_mark_contract;
+mod catalog_requests;
+mod catalog_resolution;
+mod catalog_snapshot;
+mod catalog_watch;
 pub mod plugin_sources;
 #[cfg(test)]
 mod plugin_sources_contract;
-pub mod catalog_images;
-mod catalog_identity;
-mod catalog_resolution;
-mod catalog_requests;
-mod catalog_snapshot;
-mod catalog_mark;
-mod catalog_watch;
-#[cfg(test)]
-mod catalog_mark_contract;
-#[cfg(test)]
-mod account_sync_contract;
+pub mod portable;
 
 /// A file's identity: the MD5 of its first 16 MiB, in hex, and its size in
 /// bytes. dandanplay matches a video by these two.
@@ -207,12 +207,12 @@ mod catalog_context_contract;
 #[cfg(test)]
 mod catalog_contract;
 #[cfg(test)]
+mod catalog_linked_watch_contract;
+#[cfg(test)]
 mod catalog_request_contract;
 #[cfg(test)]
 mod catalog_sync_contract;
 #[cfg(test)]
 mod settings_contract;
-#[cfg(test)]
-mod catalog_linked_watch_contract;
 #[cfg(test)]
 mod tests;

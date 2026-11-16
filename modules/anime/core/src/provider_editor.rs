@@ -44,6 +44,11 @@ fn relation_view(value: Relation) -> MappingRelation {
     }
 }
 
+/// Automatic, still-undecided evidence the user can confirm or dismiss.
+fn candidate(link: &ProviderLink) -> bool {
+    !link.confirmed && !link.manual && link.reference.kind == Kind::Subject
+}
+
 impl AnimeEngine {
     pub(super) fn open_provider_editor(&mut self) -> Result<()> {
         let root = self
@@ -96,7 +101,7 @@ impl AnimeEngine {
             .collect();
         self.state.mapping_rows = links
             .iter()
-            .filter(|(_, l)| l.confirmed)
+            .filter(|(_, l)| l.confirmed || candidate(l))
             .map(|(id, l)| MappingRow {
                 id: id.clone(),
                 provider: if l.reference.provider == Provider::Bangumi {
@@ -111,6 +116,7 @@ impl AnimeEngine {
                 },
                 reference: l.reference.id.clone(),
                 relation: relation_view(l.relation),
+                confirmed: l.confirmed,
             })
             .collect();
         self.state.mapping_target = id.into();
@@ -177,13 +183,35 @@ impl AnimeEngine {
         self.commit_mapping(link)
     }
 
+    /// A confirmed candidate becomes an exact, manual link: the same as typing
+    /// its ID in, without retyping it.
+    pub(super) fn confirm_mapping(&mut self, row: &str) -> Result<()> {
+        self.editor_target()?;
+        let mut link = self
+            .provider_editor
+            .links
+            .iter()
+            .find(|(id, l)| id == row && candidate(l))
+            .map(|(_, l)| l.clone())
+            .ok_or_else(|| Error::invalid("关联已改变，请刷新"))?;
+        if link.relation != Relation::PartOf {
+            link.relation = Relation::Exact;
+        }
+        link.confirmed = true;
+        link.manual = true;
+        link.evidence = "manual:details:confirm".into();
+        self.commit_mapping(link)
+    }
+
+    /// Unlinking a confirmed link or dismissing a candidate is a manual
+    /// decision; neither is read again nor replaced by automatic evidence.
     pub(super) fn remove_mapping(&mut self, row: &str) -> Result<()> {
         self.editor_target()?;
         let mut link = self
             .provider_editor
             .links
             .iter()
-            .find(|(id, l)| id == row && l.confirmed)
+            .find(|(id, l)| id == row && (l.confirmed || candidate(l)))
             .map(|(_, l)| l.clone())
             .ok_or_else(|| Error::invalid("关联已改变，请刷新"))?;
         link.confirmed = false;

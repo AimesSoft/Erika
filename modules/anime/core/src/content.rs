@@ -29,6 +29,112 @@ pub(super) fn items(db: &Db, root: &MediaNode) -> erika_store::catalog::Result<V
     Ok(items)
 }
 
+pub(super) fn original_overview_key(node: &MediaNode) -> Option<String> {
+    node.reference
+        .as_ref()
+        .map(|r| format!("tmdb.original_overview.{}.{}", r.kind.as_str(), r.id))
+}
+
+/// True when `text` contains Chinese Han characters and is not Japanese prose
+/// (whose grammatical particles/inflections add >20% Hiragana/Katakana).
+pub(super) fn is_chinese(text: &str) -> bool {
+    let mut han = 0usize;
+    let mut kana = 0usize;
+    for ch in text.chars() {
+        if ('\u{4E00}'..='\u{9FFF}').contains(&ch) || ('\u{3400}'..='\u{4DBF}').contains(&ch) {
+            han += 1;
+        } else if ('\u{3040}'..='\u{30FF}').contains(&ch) {
+            kana += 1;
+        }
+    }
+    han > 0 && kana * 4 <= han
+}
+
+fn normalize_summary(raw: &str) -> Option<String> {
+    let mut text = raw.replace("\r\n", "\n").replace('\r', "\n");
+    for suffix in [
+        "(由 弹弹play AI 辅助翻译)",
+        "（由 弹弹play AI 辅助翻译）",
+        "(由弹弹play AI辅助翻译)",
+        "（由弹弹play AI辅助翻译）",
+    ] {
+        if let Some(stripped) = text.trim_end().strip_suffix(suffix) {
+            text = stripped.to_string();
+        }
+    }
+    let paragraphs: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    (!paragraphs.is_empty()).then(|| paragraphs.join("\n"))
+}
+
+/// Display-layer synopsis fallback:
+/// - For Season 2+ (`season_number > 1`), season-specific synopses (TMDB season
+///   overview -> Bangumi season summary -> dandanplay/calendar season summary)
+///   always precede the root series overview (`node.overview`), which describes
+///   Season 1 / the series premise rather than the sequel season.
+/// - Within the same scope, Chinese text ranks ahead of untranslated original-language text.
+pub(super) fn summary(
+    db: &Db,
+    node: &MediaNode,
+    season: Option<&MediaNode>,
+    calendar_summary: Option<&str>,
+) -> String {
+    let tmdb_season = season.and_then(|s| normalize_summary(&s.overview));
+    let tmdb_root = normalize_summary(&node.overview);
+    let target = season.map_or(&node.id, |s| &s.id);
+    let [bgm_season, ddp_season] =
+        crate::reviews::cached_summaries(db, target).map(|v| v.and_then(|s| normalize_summary(&s)));
+    let [bgm_root, ddp_root] = if target != &node.id {
+        crate::reviews::cached_summaries(db, &node.id)
+            .map(|v| v.and_then(|s| normalize_summary(&s)))
+    } else {
+        [None, None]
+    };
+    let ddp_season_or_cal = ddp_season.or_else(|| calendar_summary.and_then(normalize_summary));
+    let orig_root = original_overview_key(node)
+        .and_then(|key| db.setting(&key))
+        .and_then(|s| normalize_summary(&s));
+
+    let is_sequel_season = season.and_then(|s| s.season_number).is_some_and(|n| n > 1);
+
+    if is_sequel_season {
+        for candidate in [&tmdb_season, &bgm_season, &ddp_season_or_cal] {
+            if let Some(text) = candidate.as_deref().filter(|s| is_chinese(s)) {
+                return text.to_string();
+            }
+        }
+        if let Some(text) = tmdb_season.or(bgm_season).or(ddp_season_or_cal) {
+            return text;
+        }
+        for candidate in [&tmdb_root, &bgm_root, &ddp_root] {
+            if let Some(text) = candidate.as_deref().filter(|s| is_chinese(s)) {
+                return text.to_string();
+            }
+        }
+        return tmdb_root
+            .or(bgm_root)
+            .or(ddp_root)
+            .or(orig_root)
+            .unwrap_or_default();
+    }
+
+    let tmdb = tmdb_season.or(tmdb_root);
+    if let Some(text) = tmdb.as_deref().filter(|s| is_chinese(s)) {
+        return text.to_string();
+    }
+    let bgm = bgm_season.or(bgm_root);
+    let ddp = ddp_season_or_cal.or(ddp_root);
+    for candidate in [&bgm, &ddp] {
+        if let Some(text) = candidate.as_deref().filter(|s| is_chinese(s)) {
+            return text.to_string();
+        }
+    }
+    tmdb.or(bgm).or(ddp).or(orig_root).unwrap_or_default()
+}
+
 pub(super) fn show(db: &Db, node: &MediaNode) -> erika_store::catalog::Result<Show> {
     let images = db.catalog_images();
     let items = items(db, node)?;
@@ -58,9 +164,16 @@ pub(super) fn show(db: &Db, node: &MediaNode) -> erika_store::catalog::Result<Sh
         });
     let date = crate::clock::parse_date(&node.date);
     let premiere = date.unwrap_or_else(|| CalendarDate::new(1970, 1, 1));
+    let display_title = if node.original_language.eq_ignore_ascii_case("ja")
+        && !node.original_title.trim().is_empty()
+    {
+        node.original_title.clone()
+    } else {
+        node.title.clone()
+    };
     Ok(Show {
         id: node.id.0.clone(),
-        title: node.title.clone(),
+        title: display_title,
         poster: MediaSource::new(images.url(node.artwork.poster.as_ref(), 780)),
         backdrop: MediaSource::new(images.url(node.artwork.backdrop.as_ref(), 1920)),
         logo: MediaSource::new(images.url(node.artwork.logo.as_ref(), 1000)),
@@ -71,7 +184,7 @@ pub(super) fn show(db: &Db, node: &MediaNode) -> erika_store::catalog::Result<Sh
         premiere,
         has_premiere: date.is_some(),
         tags: Vec::new(),
-        summary: node.overview.clone(),
+        summary: summary(db, node, None, None),
         status,
     })
 }
@@ -173,13 +286,40 @@ pub(super) fn film(
     db: &Db,
     node: &MediaNode,
     season: &str,
+    merged: bool,
 ) -> erika_store::catalog::Result<(Vec<anime::Episode>, String)> {
     let images = db.catalog_images();
-    let mut cells = Vec::new();
-    for item in items(db, node)?
+    let all_items = items(db, node)?;
+    let has_regular = all_items
+        .iter()
+        .any(|i| i.season_number.is_some_and(|s| s > 0));
+    let filtered: Vec<MediaNode> = all_items
         .into_iter()
-        .filter(|i| season.is_empty() || i.parent.as_ref().is_some_and(|p| p.0 == season))
-    {
+        .filter(|i| {
+            if merged {
+                !has_regular || i.season_number.is_some_and(|s| s > 0)
+            } else {
+                season.is_empty() || i.parent.as_ref().is_some_and(|p| p.0 == season)
+            }
+        })
+        .collect();
+    let distinct_seasons: std::collections::BTreeSet<Option<u32>> =
+        filtered.iter().map(|i| i.season_number).collect();
+    let show_markers = merged && distinct_seasons.len() > 1;
+    let mut prev_season: Option<Option<u32>> = None;
+    let mut cells = Vec::new();
+    for item in filtered {
+        let season_marker = if show_markers && prev_season != Some(item.season_number) {
+            prev_season = Some(item.season_number);
+            match item.season_number {
+                Some(0) => "特别篇".into(),
+                Some(s) => format!("第 {s} 季"),
+                None => String::new(),
+            }
+        } else {
+            prev_season = Some(item.season_number);
+            String::new()
+        };
         let file = file(db, &item.id)?;
         let watched = db.catalog_watched(&item.id)?.is_some_and(|w| w.watched);
         let (duration, position) = file.as_ref().map_or((0., 0.), |selected| {
@@ -229,6 +369,7 @@ pub(super) fn film(
                 ),
             ),
             numeral: chapter(&item),
+            season_marker,
             watched,
             next: false,
             progress: if watched {

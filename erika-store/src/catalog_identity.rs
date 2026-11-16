@@ -12,20 +12,27 @@ impl Identities {
         by_id: impl Fn(&MediaId) -> Result<Option<MediaNode>>,
         by_ref: impl Fn(&ProviderRef) -> Result<Option<MediaNode>>,
     ) -> Result<Self> {
-        if nodes.len() > 100_000 { return Err(Error::invalid("媒体记录过多")); }
+        if nodes.len() > 100_000 {
+            return Err(Error::invalid("媒体记录过多"));
+        }
         let mut ids = HashSet::new();
         let mut refs = HashSet::new();
         let mut map = HashMap::new();
         for n in nodes {
             n.validate()?;
-            let reference = n.reference.as_ref().ok_or_else(|| Error::invalid("规范媒体缺少 TMDB 身份"))?;
+            let reference = n
+                .reference
+                .as_ref()
+                .ok_or_else(|| Error::invalid("规范媒体缺少 TMDB 身份"))?;
             if !ids.insert(&n.id) || !refs.insert(reference) {
                 return Err(Error::invalid("媒体记录重复"));
             }
             if by_id(&n.id)?.is_some_and(|old| old.reference.as_ref() != Some(reference)) {
                 return Err(Error::conflict("UUID 与另一媒体身份冲突"));
             }
-            if let Some(old) = by_ref(reference)? { map.insert(n.id.clone(), old.id); }
+            if let Some(old) = by_ref(reference)? {
+                map.insert(n.id.clone(), old.id);
+            }
         }
         Ok(Self(map))
     }
@@ -41,7 +48,9 @@ impl Identities {
     }
     pub fn binding(&self, b: &FileBinding) -> FileBinding {
         let mut b = b.clone();
-        for item in &mut b.items { item.media = self.resolve(&item.media); }
+        for item in &mut b.items {
+            item.media = self.resolve(&item.media);
+        }
         b
     }
     pub fn danmaku(&self, b: &DanmakuBinding) -> DanmakuBinding {

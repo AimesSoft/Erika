@@ -561,3 +561,115 @@ fn a_later_season_does_not_use_dandanplay_absolute_numbers_as_keys() {
         .play_episode(regular.episodes[0].id.0.clone())
         .unwrap();
 }
+
+#[test]
+fn episode_list_filters_sorts_and_jumps_by_number() {
+    let mut engine = engine();
+    let (work, special, regular) = series(&engine, 5);
+    bind(
+        &engine,
+        "file:///v/s1e2.mkv",
+        vec![item(&regular.episodes[1].id, None, None)],
+        0.,
+        0.,
+    );
+    engine.open(work.node.id.0).unwrap();
+    engine
+        .mark_episode(regular.episodes[2].id.0.clone(), true)
+        .unwrap();
+    engine.show_episode_list(true).unwrap();
+    assert!(engine.state.episode_list_open);
+    assert!(engine.state.has_seasons);
+    assert_eq!(engine.state.listed_episodes.len(), 5);
+
+    engine.set_episode_filter(EpisodeFilter::Available).unwrap();
+    assert_eq!(engine.state.listed_episodes.len(), 1);
+    assert_eq!(engine.state.listed_episodes[0].number, 2);
+
+    engine.set_episode_filter(EpisodeFilter::Watched).unwrap();
+    assert_eq!(engine.state.listed_episodes.len(), 1);
+    assert_eq!(engine.state.listed_episodes[0].number, 3);
+
+    // Jumping to an episode hidden by the active filter resets to All and locates it.
+    engine.jump_to_episode("4".into()).unwrap();
+    assert_eq!(engine.state.episode_filter, EpisodeFilter::All);
+    assert_eq!(engine.state.episode_jump_target, regular.episodes[3].id.0);
+    assert_eq!(engine.state.episode_jump_seq, 1);
+
+    engine.set_episode_sort(EpisodeSort::Descending).unwrap();
+    assert_eq!(engine.state.listed_episodes[0].number, 5);
+    assert_eq!(engine.state.listed_episodes[4].number, 1);
+
+    // Season-qualified jump switches to season 0 (specials) and locates episode 1.
+    engine.jump_to_episode("S00E01".into()).unwrap();
+    assert_eq!(engine.state.selected_season, special.node.id.0);
+    assert_eq!(engine.state.episode_jump_target, special.episodes[0].id.0);
+}
+
+#[test]
+fn split_seasons_open_by_season_and_merge_with_vertical_markers() {
+    let mut engine = engine();
+    let mut work = tmdb::parse_work(
+        erika_catalog::Kind::Tv,
+        220542,
+        &serde_json::json!({
+            "id": 220542,
+            "name": "药屋少女的呢喃",
+            "original_name": "薬屋のひとりごと",
+            "original_language": "ja",
+            "first_air_date": "2023-10-22",
+            "seasons": [{"id": 329446, "season_number": 1, "name": "第 1 季", "air_date": "2023-10-22"}]
+        }),
+    )
+    .unwrap();
+    work.apply_episode_group(&serde_json::json!({
+        "type": 6,
+        "groups": [
+            {
+                "id": "6533f8a10000000000000001",
+                "name": "Season 1",
+                "order": 1,
+                "episodes": [{"id": 4800001, "name": "猫猫", "air_date": "2023-10-22"}]
+            },
+            {
+                "id": "6abfdb678348fc8997c4b3fe",
+                "name": "Season 3",
+                "order": 3,
+                "episodes": [{"id": 7810328, "name": "蝗虫", "air_date": "2026-10-02"}]
+            }
+        ]
+    }))
+    .unwrap();
+    let mut nodes = vec![work.node.clone()];
+    nodes.extend(work.seasons.clone());
+    for split in &work.split_seasons {
+        nodes.extend(split.episodes.clone());
+    }
+    engine.db.catalog_save_nodes(&nodes).unwrap();
+    let s3_id = work
+        .seasons
+        .iter()
+        .find(|s| s.season_number == Some(3))
+        .unwrap()
+        .id
+        .0
+        .clone();
+
+    // Opening a Season ID from the per-season library opens directly on Season 3.
+    engine.open_from_library(s3_id.clone()).unwrap();
+    assert_eq!(engine.state.opened, work.node.id.0);
+    assert_eq!(engine.state.selected_season, s3_id);
+    assert_eq!(engine.state.selected_season_title, "第 3 季");
+    assert_eq!(engine.state.show.premiere.year, 2026);
+    assert_eq!(engine.state.episodes.len(), 1);
+    assert_eq!(engine.state.episodes[0].numeral, "S03E01");
+    assert!(engine.state.episodes[0].season_marker.is_empty());
+
+    // Enabling `playback.merge_seasons` merges all regular seasons with markers.
+    engine.db.set_setting("merge_seasons", Some("true"));
+    engine.history_changed().unwrap();
+    assert_eq!(engine.state.episodes.len(), 2);
+    assert_eq!(engine.state.episodes[0].season_marker, "第 1 季");
+    assert_eq!(engine.state.episodes[1].season_marker, "第 3 季");
+    assert_eq!(engine.state.episodes[1].numeral, "S03E01");
+}

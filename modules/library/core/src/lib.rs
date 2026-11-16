@@ -313,7 +313,13 @@ impl LibraryEngine {
     /// Everything as the database has it now.
     fn load(&mut self) {
         let entries = self.db.entries(None);
-        let shelf = match self.db.catalog_shelf(None).and_then(|shelf| {
+        let merged = catalog_view::merge_seasons(&self.db);
+        let raw_shelf = if merged {
+            self.db.catalog_shelf(None)
+        } else {
+            self.db.catalog_season_shelf(None)
+        };
+        let shelf = match raw_shelf.and_then(|shelf| {
             self.load_contents(&entries)?;
             Ok(shelf)
         }) {
@@ -326,13 +332,13 @@ impl LibraryEngine {
             }
         };
         let images = self.db.catalog_images();
-        self.state.posters = shelf.iter().map(|s| poster(s, &images)).collect();
+        self.state.posters = shelf.iter().map(|s| poster(&self.db, s, &images)).collect();
         let mut added = shelf.clone();
         added.sort_by(|a, b| b.added.cmp(&a.added));
         self.state.recent = added
             .iter()
             .take(RECENT)
-            .map(|s| poster(s, &images))
+            .map(|s| poster(&self.db, s, &images))
             .collect();
         self.state.has_recent = !self.state.recent.is_empty();
 
@@ -1062,7 +1068,9 @@ impl LibraryEngine {
                     }
                 }
                 Done::Picker(reply) => self.take_picker(reply),
-                Done::Catalog(reply) => { changed |= self.take_api(reply); }
+                Done::Catalog(reply) => {
+                    changed |= self.take_api(reply);
+                }
             }
         }
         self.load();
@@ -1165,11 +1173,12 @@ impl LibraryEngine {
         let mut posters: Vec<LibraryPoster> = if source == 0 {
             self.state.posters.clone()
         } else {
-            self.db
-                .catalog_shelf(Some(source))?
-                .iter()
-                .map(|s| poster(s, &images))
-                .collect()
+            let rows = if catalog_view::merge_seasons(&self.db) {
+                self.db.catalog_shelf(Some(source))?
+            } else {
+                self.db.catalog_season_shelf(Some(source))?
+            };
+            rows.iter().map(|s| poster(&self.db, s, &images)).collect()
         };
         let total = posters.len() as i64;
         let watching = posters.iter().filter(|p| p.watching).count() as i64;
@@ -1260,45 +1269,110 @@ impl LibraryEngine {
             .iter()
             .find(|p| p.id == id)
             .cloned()
+            .or_else(|| {
+                let parsed = erika_catalog::MediaId::parse(&id).ok()?;
+                let children = self.db.catalog_children(&parsed).ok()?;
+                self.state
+                    .posters
+                    .iter()
+                    .find_map(|p| children.iter().any(|c| c.id.0 == p.id).then(|| p.clone()))
+            })
             .ok_or_else(|| CommandError::new("unknown_show", "unknown library show"))?;
+        let target = show.id.clone();
         self.state.show = show;
-        self.state.opened = id.clone();
-        library::emit::open_show(id, home);
+        self.state.opened = target.clone();
+        library::emit::open_show(target, home);
         Ok(())
     }
 }
 
 impl library::Commands for LibraryEngine {
-    fn catalog_fetch(&mut self, request: String, reference: library::CatalogReference, season: Option<i64>) -> Result<(), CommandError> {
+    fn catalog_fetch(
+        &mut self,
+        request: String,
+        reference: library::CatalogReference,
+        season: Option<i64>,
+    ) -> Result<(), CommandError> {
         self.api_fetch(request, reference, season)
     }
-    fn catalog_resolve(&mut self, request: String, file: i64, revision: i64, dry_run: bool) -> Result<(), CommandError> {
+    fn catalog_resolve(
+        &mut self,
+        request: String,
+        file: i64,
+        revision: i64,
+        dry_run: bool,
+    ) -> Result<(), CommandError> {
         self.api_resolve(request, file, revision, dry_run)
     }
-    fn catalog_bind(&mut self, request: String, bindings: Vec<library::CatalogBinding>, preview: bool) -> Result<(), CommandError> {
-        let batch = erika_store::catalog::CatalogBatch { bindings: catalog_api::input_bindings(bindings)?, ..Default::default() };
+    fn catalog_bind(
+        &mut self,
+        request: String,
+        bindings: Vec<library::CatalogBinding>,
+        preview: bool,
+    ) -> Result<(), CommandError> {
+        let batch = erika_store::catalog::CatalogBatch {
+            bindings: catalog_api::input_bindings(bindings)?,
+            ..Default::default()
+        };
         self.api_apply(request, batch, preview)
     }
-    fn catalog_unbind(&mut self, request: String, file: i64, revision: i64, preview: bool) -> Result<(), CommandError> {
-        self.catalog_bind(request, vec![library::CatalogBinding { file, revision, decision: library::CatalogDecision::Blocked, items: vec![], evidence: "explicit unbind".into() }], preview)
+    fn catalog_unbind(
+        &mut self,
+        request: String,
+        file: i64,
+        revision: i64,
+        preview: bool,
+    ) -> Result<(), CommandError> {
+        self.catalog_bind(
+            request,
+            vec![library::CatalogBinding {
+                file,
+                revision,
+                decision: library::CatalogDecision::Blocked,
+                items: vec![],
+                evidence: "explicit unbind".into(),
+            }],
+            preview,
+        )
     }
-    fn catalog_bind_danmaku(&mut self, request: String, bindings: Vec<library::CatalogDanmaku>, preview: bool) -> Result<(), CommandError> {
-        let batch = erika_store::catalog::CatalogBatch { danmaku: catalog_api::input_danmaku(bindings)?, ..Default::default() };
+    fn catalog_bind_danmaku(
+        &mut self,
+        request: String,
+        bindings: Vec<library::CatalogDanmaku>,
+        preview: bool,
+    ) -> Result<(), CommandError> {
+        let batch = erika_store::catalog::CatalogBatch {
+            danmaku: catalog_api::input_danmaku(bindings)?,
+            ..Default::default()
+        };
         self.api_apply(request, batch, preview)
     }
-    fn catalog_map_provider(&mut self, request: String, mappings: Vec<library::CatalogMapping>, preview: bool) -> Result<(), CommandError> {
-        let batch = erika_store::catalog::CatalogBatch { links: catalog_api::input_mappings(mappings)?, ..Default::default() };
+    fn catalog_map_provider(
+        &mut self,
+        request: String,
+        mappings: Vec<library::CatalogMapping>,
+        preview: bool,
+    ) -> Result<(), CommandError> {
+        let batch = erika_store::catalog::CatalogBatch {
+            links: catalog_api::input_mappings(mappings)?,
+            ..Default::default()
+        };
         self.api_apply(request, batch, preview)
     }
     fn catalog_allow_auto(&mut self, file: i64, revision: i64) -> Result<(), CommandError> {
-        let revision = u64::try_from(revision).map_err(|_| CommandError::new("invalid", "版本不能为负数"))?;
-        self.db.catalog_allow_auto(file, revision).map_err(catalog_api::store_error)?;
+        let revision =
+            u64::try_from(revision).map_err(|_| CommandError::new("invalid", "版本不能为负数"))?;
+        self.db
+            .catalog_allow_auto(file, revision)
+            .map_err(catalog_api::store_error)?;
         self.load();
         library::emit::files_changed();
         Ok(())
     }
     fn catalog_undo(&mut self, change: String) -> Result<(), CommandError> {
-        self.db.catalog_undo(&change).map_err(catalog_api::store_error)?;
+        self.db
+            .catalog_undo(&change)
+            .map_err(catalog_api::store_error)?;
         self.load();
         library::emit::files_changed();
         Ok(())
@@ -1595,12 +1669,21 @@ impl library::Commands for LibraryEngine {
     fn play_file(&mut self, key: i64) -> Result<(), CommandError> {
         // Re-read the address rather than trusting an earlier visible row.
         // Neither a provider episode nor a canonical binding is required.
-        let entry = self.db.entries(None).into_iter()
+        let entry = self
+            .db
+            .entries(None)
+            .into_iter()
             .find(|entry| entry.key == key && entry.file.is_some())
             .ok_or_else(unknown_file)?;
-        let source = self.db.sources().into_iter().find(|source| source.id == entry.source)
+        let source = self
+            .db
+            .sources()
+            .into_iter()
+            .find(|source| source.id == entry.source)
             .ok_or_else(unknown_file)?;
-        let parts = root_of(&source).and_then(|root| parts(&root, &entry.url)).unwrap_or_default();
+        let parts = root_of(&source)
+            .and_then(|root| parts(&root, &entry.url))
+            .unwrap_or_default();
         let title = self.name_of(&entry.url, &parts);
         library::emit::play_source(MediaSource::new(entry.url), title);
         Ok(())
@@ -1746,12 +1829,31 @@ impl library::Commands for LibraryEngine {
 }
 
 impl library::Queries for LibraryEngine {
-    fn catalog_inspect(&self, file: i64, answer: Answer<library::CatalogInspection>) { answer.send(self.api_inspect(file)); }
-    fn catalog_media(&self, id: String, answer: Answer<library::CatalogNode>) { answer.send(self.api_media(&id)); }
-    fn catalog_children(&self, id: String, answer: Answer<Vec<library::CatalogNode>>) { answer.send(self.api_children(&id)); }
-    fn catalog_search(&self, kind: library::CatalogKind, text: String, year: Option<i64>, page: i64, answer: Answer<library::CatalogSearch>) { self.api_search(kind, text, year, page, answer); }
-    fn catalog_job(&self, id: String, answer: Answer<library::CatalogJob>) { answer.send(self.api_job(&id)); }
-    fn catalog_receipt(&self, request: String, answer: Answer<library::CatalogReceipt>) { answer.send(self.api_receipt(&request)); }
+    fn catalog_inspect(&self, file: i64, answer: Answer<library::CatalogInspection>) {
+        answer.send(self.api_inspect(file));
+    }
+    fn catalog_media(&self, id: String, answer: Answer<library::CatalogNode>) {
+        answer.send(self.api_media(&id));
+    }
+    fn catalog_children(&self, id: String, answer: Answer<Vec<library::CatalogNode>>) {
+        answer.send(self.api_children(&id));
+    }
+    fn catalog_search(
+        &self,
+        kind: library::CatalogKind,
+        text: String,
+        year: Option<i64>,
+        page: i64,
+        answer: Answer<library::CatalogSearch>,
+    ) {
+        self.api_search(kind, text, year, page, answer);
+    }
+    fn catalog_job(&self, id: String, answer: Answer<library::CatalogJob>) {
+        answer.send(self.api_job(&id));
+    }
+    fn catalog_receipt(&self, request: String, answer: Answer<library::CatalogReceipt>) {
+        answer.send(self.api_receipt(&request));
+    }
     fn browse(
         &self,
         source: i64,

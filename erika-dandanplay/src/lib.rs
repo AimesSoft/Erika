@@ -586,11 +586,11 @@ pub struct Found {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SearchReply {
+pub(crate) struct SearchReply {
     #[serde(default)]
-    animes: Vec<Found>,
+    pub(crate) animes: Vec<Found>,
     #[serde(default = "succeeded")]
-    success: bool,
+    pub(crate) success: bool,
     #[serde(default)]
     error_message: Option<String>,
 }
@@ -616,7 +616,7 @@ pub fn search(keyword: &str) -> Result<Vec<Found>> {
 
 /// `text` for a URL query: unreserved characters as they are, the rest as
 /// percent-encoded UTF-8.
-fn encode(text: &str) -> String {
+pub(crate) fn encode(text: &str) -> String {
     text.bytes()
         .map(|byte| match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {

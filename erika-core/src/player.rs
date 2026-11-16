@@ -164,8 +164,15 @@ impl ErikaEngine {
         self.open_file_named(source, None, entry);
     }
 
-    pub(crate) fn open_file_named(&mut self, source: MediaSource, title: Option<String>, entry: Option<bern::Entry>) {
-        let title = title.filter(|title| !title.trim().is_empty()).unwrap_or_else(|| self.source_name(&source));
+    pub(crate) fn open_file_named(
+        &mut self,
+        source: MediaSource,
+        title: Option<String>,
+        entry: Option<bern::Entry>,
+    ) {
+        let title = title
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| self.source_name(&source));
         let (file, fingerprint) = self.identify(&source);
         let (start, progress) = self.saved_position(file);
         self.start(title, source_note(&source), no_picture(), progress);
@@ -243,7 +250,8 @@ impl ErikaEngine {
             return;
         }
         if let Some((logical, transport)) = source.as_ref().and_then(|source| {
-            self.remote_transport(source).map(|transport| (source.clone(), transport))
+            self.remote_transport(source)
+                .map(|transport| (source.clone(), transport))
         }) {
             self.unload();
             self.logical_source = Some(logical);
@@ -257,13 +265,18 @@ impl ErikaEngine {
     /// Resolve a mounted PC library with its current, device-local credential.
     /// A token-free HTTP identity also resumes after import and before a rescan.
     pub(crate) fn remote_transport(&self, source: &MediaSource) -> Option<MediaSource> {
-        self.db.sources().into_iter()
+        self.db
+            .sources()
+            .into_iter()
             .filter(|source| source.kind == "dandanplay")
             .find_map(|known| {
                 let setting = erika_store::portable::dandanplay_token_setting(known.id);
                 erika_dandanplay::remote::authorized_stream(
-                    &known.location, &source.url, &self.db.setting(&setting).unwrap_or_default(),
-                ).map(MediaSource::new)
+                    &known.location,
+                    &source.url,
+                    &self.db.setting(&setting).unwrap_or_default(),
+                )
+                .map(MediaSource::new)
             })
     }
 
@@ -1090,21 +1103,43 @@ pub(crate) mod tests {
         e.state.features.danmaku = false;
         let base = "https://media.example.invalid/proxy";
         let logical = format!("{base}/api/v1/stream/id/video-1");
-        let source = e.db.add_source("dandanplay", "客厅", base, "movie").unwrap();
+        let source =
+            e.db.add_source("dandanplay", "客厅", base, "movie")
+                .unwrap();
         let setting = erika_store::portable::dandanplay_token_setting(source);
         e.db.set_setting(&setting, Some("fake-key-one"));
-        let file = e.db.saw(source, &logical, 100, 0, Some(&erika_store::Fingerprint {
-            md5: "f".repeat(32), size: 100,
-        })).unwrap();
-        e.open_file_named(MediaSource::new(&logical), Some("来源文件名.mp4".into()), None);
+        let file =
+            e.db.saw(
+                source,
+                &logical,
+                100,
+                0,
+                Some(&erika_store::Fingerprint {
+                    md5: "f".repeat(32),
+                    size: 100,
+                }),
+            )
+            .unwrap();
+        e.open_file_named(
+            MediaSource::new(&logical),
+            Some("来源文件名.mp4".into()),
+            None,
+        );
         assert_eq!(e.state.title, "来源文件名.mp4");
         assert_eq!(e.file, Some(file));
         assert_eq!(e.current_source().unwrap().url, logical);
-        assert_eq!(kernel.opens.lock().unwrap()[0].0, format!("{logical}?token=fake-key-one"));
+        assert_eq!(
+            kernel.opens.lock().unwrap()[0].0,
+            format!("{logical}?token=fake-key-one")
+        );
         assert!(!e.plugin_media().to_string().contains("fake-key"));
         *kernel.playback.lock().unwrap() = Playback {
             source: e.source.as_ref().map(|s| s.url.clone()),
-            loaded: true, playing: true, position: 25., duration: Some(100.), ..Default::default()
+            loaded: true,
+            playing: true,
+            position: 25.,
+            duration: Some(100.),
+            ..Default::default()
         };
         e.player_tick().unwrap();
         e.return_to_frame().unwrap();
@@ -1115,11 +1150,18 @@ pub(crate) mod tests {
 
         e.db.set_setting(&setting, Some("fake-key-two"));
         e.continue_last().unwrap();
-        assert_eq!(kernel.opens.lock().unwrap().last().unwrap().0, format!("{logical}?token=fake-key-two"));
+        assert_eq!(
+            kernel.opens.lock().unwrap().last().unwrap().0,
+            format!("{logical}?token=fake-key-two")
+        );
         assert_eq!(e.state.elapsed, 25.);
         assert_eq!(e.state.title, "来源文件名");
         assert_eq!(e.file, Some(file));
-        assert!(e.queue.iter().all(|item| !item.source.url.contains("token=")));
+        assert!(
+            e.queue
+                .iter()
+                .all(|item| !item.source.url.contains("token="))
+        );
         e.db.remove_source(source);
         assert!(e.remote_transport(&MediaSource::new(&logical)).is_none());
     }
@@ -1129,8 +1171,10 @@ pub(crate) mod tests {
         let mut e = ErikaEngine::default();
         e.state.preferences.auto_match = false;
         let base = "https://media.example.invalid";
-        e.db.add_source("dandanplay", "客厅", base, "movie").unwrap();
-        e.open_file(MediaSource::new(format!("{base}/api/v1/stream/id/video"))).unwrap();
+        e.db.add_source("dandanplay", "客厅", base, "movie")
+            .unwrap();
+        e.open_file(MediaSource::new(format!("{base}/api/v1/stream/id/video")))
+            .unwrap();
         assert!(!e.state.video);
         assert!(e.state.paused);
         e.player_tick().unwrap();
@@ -2351,9 +2395,15 @@ pub(crate) mod tests {
                 e.state.preferences.auto_match = false;
                 let url = "https://example.invalid/resume.mp4";
                 let file = identified.then(|| {
-                    let file = e.db.opened(url, Some(&erika_store::Fingerprint {
-                        md5: "a".repeat(32), size: 100,
-                    })).unwrap();
+                    let file =
+                        e.db.opened(
+                            url,
+                            Some(&erika_store::Fingerprint {
+                                md5: "a".repeat(32),
+                                size: 100,
+                            }),
+                        )
+                        .unwrap();
                     e.db.save_progress(file, 12., 30.);
                     file
                 });
@@ -2389,7 +2439,10 @@ pub(crate) mod tests {
         assert!(e.db.recents(10).is_empty());
         e.open_file(MediaSource::new(first)).unwrap();
         *kernel.playback.lock().unwrap() = Playback {
-            source: Some(first.into()), loaded: true, playing: true, position: 8.,
+            source: Some(first.into()),
+            loaded: true,
+            playing: true,
+            position: 8.,
             ..Default::default()
         };
         e.player_tick().unwrap();

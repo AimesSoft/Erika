@@ -16,6 +16,7 @@ fn source(engine: &mut AnimeEngine, id: i64, work: tmdb::Work, previous: Option<
         id,
         previous,
         result: Ok(work),
+        candidates: Default::default(),
     });
 }
 
@@ -96,6 +97,7 @@ fn a_late_different_identity_cannot_replace_another_engines_result() {
             opened: second.state.opened.clone(),
             previous: None,
             result: Ok((late.clone(), None)),
+            candidates: Default::default(),
         });
         assert!(second.state.details_failed);
         assert_eq!(second.state.opened, source_key(42));
@@ -107,6 +109,7 @@ fn a_late_different_identity_cannot_replace_another_engines_result() {
             opened: second.state.opened.clone(),
             previous,
             result: Ok((late.clone(), None)),
+            candidates: Default::default(),
         });
         assert!(!second.state.details_failed);
         assert_eq!(second.state.opened, late.node.id.0);
@@ -136,7 +139,11 @@ fn invalid_cache_is_not_silently_replaced_or_reported_as_saved() {
     engine.db.set_setting(SOURCE_CACHE, Some("broken cache"));
     engine.restore_metadata();
     assert_eq!(engine.state.error, "新番身份缓存格式不正确");
-    assert!(engine.remember_source(42, MediaId::new(), None).is_err());
+    assert!(
+        engine
+            .remember_source(42, MediaId::new(), None, false)
+            .is_err()
+    );
     assert_eq!(
         engine.db.setting(SOURCE_CACHE).as_deref(),
         Some("broken cache")
@@ -150,6 +157,7 @@ fn invalid_cache_is_not_silently_replaced_or_reported_as_saved() {
         opened: engine.state.opened.clone(),
         previous: None,
         result: Ok((work(701), None)),
+        candidates: Default::default(),
     });
     assert!(engine.state.details_failed);
     assert_eq!(engine.state.opened, source_key(42));
@@ -164,12 +172,15 @@ fn merging_a_full_cache_keeps_the_new_entry_when_timestamps_tie() {
             source: source_ref(id as i64).unwrap(),
             media: media.clone(),
             updated_at: erika_store::now(),
+            evidence: false,
         })
         .collect();
     engine
         .db
         .set_setting(SOURCE_CACHE, Some(&serde_json::to_string(&rows).unwrap()));
-    engine.remember_source(9999, media.clone(), None).unwrap();
+    engine
+        .remember_source(9999, media.clone(), None, false)
+        .unwrap();
     assert_eq!(engine.metadata.sources.len(), MAX_SOURCES);
     assert_eq!(engine.source_snapshot(9999).unwrap().media, media);
 }

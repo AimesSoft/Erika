@@ -72,41 +72,42 @@ pub fn library_page(
                 if window.compact {
                     library_phone(app: app, library: library, listing: listing)
                 } else {
-                Column(gap: 0, padding_x: if window.tv { 56.0 } else if window.medium { 24.0 } else { 32.0 }, padding_y: 6, appear: page_in) {
-                    Adaptive {
-                        Layout(size: expanded) {
-                            Row(gap: 12, align: center) {
-                                Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
-                                library_tabs()
-                                Spacer
-                                library_zoom(app: app)
-                                library_sort()
-                            }
-                        }
-                        Layout(size: compact) {
-                            Column(gap: 12) {
+                Column(gap: 0, padding_y: 6, appear: page_in) {
+                    Column(gap: 0, padding_x: if window.tv { 56.0 } else if window.medium { 24.0 } else { 32.0 }) {
+                        Adaptive {
+                            Layout(size: expanded) {
                                 Row(gap: 12, align: center) {
                                     Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
-                                    Spacer
-                                    library_sort()
-                                }
-                                Row(gap: 12, align: center) {
                                     library_tabs()
                                     Spacer
                                     library_zoom(app: app)
+                                    library_sort()
+                                }
+                            }
+                            Layout(size: compact) {
+                                Column(gap: 12) {
+                                    Row(gap: 12, align: center) {
+                                        Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
+                                        Spacer
+                                        library_sort()
+                                    }
+                                    Row(gap: 12, align: center) {
+                                        library_tabs()
+                                        Spacer
+                                        library_zoom(app: app)
+                                    }
                                 }
                             }
                         }
-                    }
-                    Canvas(height: 14)
-                    Row(gap: 8, align: center) {
-                        ForEach(items: listing.filters, key: id) |chip| {
-                            library_filter(value: chip.value, count: chip.count)
+                        Canvas(height: 14)
+                        Row(gap: 8, align: center) {
+                            ForEach(items: listing.filters, key: id) |chip| {
+                                library_filter(value: chip.value, count: chip.count)
+                            }
+                            Spacer
+                            library_source_chips(library: library)
                         }
-                        Spacer
-                        library_source_chips(library: library)
                     }
-                    Canvas(height: 18)
                     library_wall(app: app, library: library, listing: listing)
                 }
                 }
@@ -246,33 +247,42 @@ pub fn library_grid(
     #[session] draft: LibraryDraft,
 ) -> impl View {
     ui! {
-        Row(gap: if window.compact { 2.0 } else { 8.0 }, align: top, padding_x: if window.compact { 16.0 } else { 0.0 }) {
+        Row(gap: 0.0, align: top) {
             ScrollView(position: draft.position, arrival: nudge, appear: page_in) {
-                Column(gap: 0) {
-                    if window.compact {
-                        library_phone_header(app: app, library: library, listing: listing)
-                    }
-                    if listing.empty {
-                        Column(gap: 12, padding_y: 24) {
-                            Text(content: tr! { "zh-Hans" => "还没有媒体", "en" => "No media yet" }, style: title3)
-                            Button(id: add_source_empty, label: tr! { "zh-Hans" => "添加来源", "en" => "Add source" }, icon: "folder") => draft.tab.set(LibraryTab::Sources)
+                Row(gap: 0.0, align: top) {
+                    Canvas(width: if window.tv { 56.0 } else if window.compact { 16.0 } else if window.medium { 24.0 } else { 32.0 })
+                    Column(gap: 0) {
+                        if window.compact {
+                            library_phone_header(app: app, library: library, listing: listing)
+                        } else {
+                            Canvas(height: 18)
                         }
-                    } else {
-                        // `libLayout`: every row is 2 : 3 posters and 54 points for
-                        // the titles, whatever the titles take.
-                        Grid(min_width: size, gap: gap, row_gap: if titles { 16.0 } else { gap }, cell_ratio: 0.6666666667, cell_extra: if titles { 54.0 } else { 0.0 }, stagger: 0.016, animate: smooth) {
-                            ForEach(items: listing.posters, key: id, reflow: smooth) |poster| {
-                                library_poster(library: library, poster: poster, show_details: titles)
+                        if listing.empty {
+                            Column(gap: 12, padding_y: 24) {
+                                Text(content: tr! { "zh-Hans" => "还没有媒体", "en" => "No media yet" }, style: title3)
+                                Button(id: add_source_empty, label: tr! { "zh-Hans" => "添加来源", "en" => "Add source" }, icon: "folder") => draft.tab.set(LibraryTab::Sources)
+                            }
+                        } else {
+                            // `libLayout`: every row is 2 : 3 posters and 54 points for
+                            // the titles, whatever the titles take.
+                            Grid(min_width: size, gap: gap, row_gap: if titles { 16.0 } else { gap }, cell_ratio: 0.6666666667, cell_extra: if titles { 54.0 } else { 0.0 }, stagger: 0.016, animate: smooth) {
+                                ForEach(items: listing.posters, key: id, reflow: smooth) |poster| {
+                                    library_poster(library: library, poster: poster, show_details: titles)
+                                }
                             }
                         }
+                        Canvas(height: 48)
                     }
-                    Canvas(height: 48)
+                    Canvas(width: if listing.empty { if window.tv { 56.0 } else if window.compact { 16.0 } else if window.medium { 24.0 } else { 32.0 } } else if window.compact { 8.0 } else { 12.0 })
                 }
             }
             if !listing.empty {
                 // A separate viewport keeps all letters reachable in short
                 // windows without putting them in the poster scroll area.
-                Column(width: if window.tv { 26 } else { 20 }) {
+                Column(gap: 0, width: if window.tv { 26 } else { 20 }) {
+                    if !window.compact {
+                        Canvas(height: 18)
+                    }
                     ScrollView(indicators: hidden) {
                         Column(gap: 1) {
                             ForEach(items: listing.letters, key: letter) |letter| {
@@ -285,6 +295,7 @@ pub fn library_grid(
                         }
                     }
                 }
+                Canvas(width: if window.tv { 44.0 } else if window.compact { 8.0 } else if window.medium { 16.0 } else { 24.0 })
             }
         }
     }
@@ -411,7 +422,7 @@ pub fn library_poster(
         Column(gap: 0, appear: library_card_in, disappear: library_card_out) {
             Button(id: open, label: poster.title, variant: poster) {
                 Stack(align: bottom_leading) {
-                    Image(source: poster.poster, aspect: 0.6666666667, fit: cover, label: poster.title)
+                    Image(source: poster.poster, aspect: 0.6666666667, fit: cover, corner: poster, label: poster.title, hero: poster, hero_key: poster.id)
                     if poster.watching {
                         Rail {
                             Canvas(from: 0, to: 1, height: 4) {
@@ -515,7 +526,7 @@ pub fn library_card(
         Column(gap: 0) {
             Button(id: open_recent, label: poster.title, variant: poster) {
                 Stack(align: bottom_leading) {
-                    Image(source: poster.poster, aspect: 0.6666666667, fit: cover, corner: poster, label: poster.title)
+                    Image(source: poster.poster, aspect: 0.6666666667, fit: cover, corner: poster, label: poster.title, hero: poster, hero_key: poster.id)
                     if poster.watching {
                         Rail {
                             Canvas(from: 0, to: 1, height: 4) {

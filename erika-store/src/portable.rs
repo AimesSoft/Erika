@@ -6,7 +6,9 @@ use crate::Fingerprint;
 
 /// Which file a record is about on any device: its fingerprint, or the id
 /// a media server gave it.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum FileKey {
     Hash { md5: String, size: u64 },
     Item(String),

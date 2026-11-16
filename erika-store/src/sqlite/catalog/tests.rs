@@ -539,6 +539,9 @@ fn bound_report(film: &MediaNode) -> erika_catalog::resolve::FileResolution {
                 work: erika_catalog::tmdb::Work {
                     node: film.clone(),
                     seasons: vec![],
+                    split_seasons: vec![],
+                    active_dates: vec![],
+                    original_overview: String::new(),
                 },
                 season: None,
                 items: vec![BindingItem {
@@ -699,16 +702,33 @@ fn a_stale_scan_cannot_recreate_addresses_in_a_replaced_source() {
 
 #[test]
 fn an_empty_database_gets_the_complete_schema_once() {
-    let db=Db::ready(Connection::open_in_memory().unwrap()).unwrap();
-    assert_eq!(db.conn.query_row("PRAGMA application_id",[],|r|r.get::<_,i64>(0)).unwrap(),super::super::APPLICATION_ID);
-    assert_eq!(db.conn.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),super::super::SCHEMA_VERSION);
-    db.set_setting("kept",Some("value"));
+    let db = Db::ready(Connection::open_in_memory().unwrap()).unwrap();
+    assert_eq!(
+        db.conn
+            .query_row("PRAGMA application_id", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        super::super::APPLICATION_ID
+    );
+    assert_eq!(
+        db.conn
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        super::super::SCHEMA_VERSION
+    );
+    db.set_setting("kept", Some("value"));
     db.catalog_save_nodes(&tv()).unwrap();
-    let reopened=Db::ready(db.conn).unwrap();
-    assert_eq!(reopened.setting("kept").as_deref(),Some("value"));
-    assert_eq!(reopened.catalog_export().unwrap().nodes.len(),6);
-    let tables:i64=reopened.conn.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('media_alias','legacy_identity')",[],|r|r.get(0)).unwrap();
-    assert_eq!(tables,0);
+    let reopened = Db::ready(db.conn).unwrap();
+    assert_eq!(reopened.setting("kept").as_deref(), Some("value"));
+    assert_eq!(reopened.catalog_export().unwrap().nodes.len(), 6);
+    let tables: i64 = reopened
+        .conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name IN ('media_alias','legacy_identity')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tables, 0);
 }
 
 #[test]
@@ -775,24 +795,130 @@ fn measured_playback_survives_reopen_and_serializes_concurrent_players() {
 }
 
 #[test]
-fn mismatched_databases_are_rejected_without_changes_or_backups() {
-    let dir=std::env::temp_dir().join(format!("erika-format-test-{}",MediaId::new().0));
-    std::fs::create_dir(&dir).unwrap();
-    for (index,version,app) in [(0,0,0),(1,2,0),(2,999,super::super::APPLICATION_ID),(3,1,7)] {
-        let path=dir.join(format!("{index}.db"));
-        {
-            let conn=Connection::open(&path).unwrap();
-            conn.execute_batch("CREATE TABLE untouched(value TEXT); INSERT INTO untouched VALUES('keep');").unwrap();
-            conn.pragma_update(None,"user_version",version).unwrap();
-            conn.pragma_update(None,"application_id",app).unwrap();
-        }
-        let before=std::fs::read(&path).unwrap();
-        assert!(Db::at(&path).is_err());
-        assert_eq!(std::fs::read(&path).unwrap(),before);
-        let conn=Connection::open(&path).unwrap();
-        assert_eq!(conn.query_row("SELECT value FROM untouched",[],|r|r.get::<_,String>(0)).unwrap(),"keep");
-        assert_eq!(conn.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),version);
+fn season_shelf_splits_regular_seasons_and_reparents_episode_groups() {
+    use serde_json::json;
+    let db = Db::in_memory();
+    let mut work = erika_catalog::tmdb::parse_work(
+        Kind::Tv,
+        220542,
+        &json!({
+            "id": 220542,
+            "name": "药屋少女的呢喃",
+            "seasons": [{"id": 329446, "season_number": 1, "name": "第 1 季", "air_date": "2023-10-22"}]
+        }),
+    )
+    .unwrap();
+    let merged_s1 = erika_catalog::tmdb::parse_season(
+        &work,
+        1,
+        &json!({
+            "id": 329446,
+            "season_number": 1,
+            "name": "第 1 季",
+            "episodes": [
+                {"id": 4800001, "season_number": 1, "episode_number": 1, "name": "猫猫", "air_date": "2023-10-22"},
+                {"id": 7810328, "season_number": 1, "episode_number": 49, "name": "蝗虫", "air_date": "2026-10-02"}
+            ]
+        }),
+    )
+    .unwrap();
+    let mut initial = vec![work.node.clone(), merged_s1.node.clone()];
+    initial.extend(merged_s1.episodes.clone());
+    let stored = db.catalog_save_nodes(&initial).unwrap();
+    let ep_s1 = stored.iter().find(|n| n.episode_number == Some(1)).unwrap();
+    let ep_s3 = stored
+        .iter()
+        .find(|n| n.episode_number == Some(49))
+        .unwrap();
+    let f1 = file(&db, "s01e01");
+    let f3 = file(&db, "s03e01");
+    db.catalog_apply(
+        &[],
+        &[],
+        &[
+            bind(f1, ep_s1, 0, Decision::Auto),
+            bind(f3, ep_s3, 0, Decision::Auto),
+        ],
+        &[],
+    )
+    .unwrap();
+
+    // Expand via TMDB episode_group (type 6): episode 7810328 moves to Season 3 E01
+    // while keeping its local MediaId and file binding intact.
+    assert!(
+        work.apply_episode_group(&json!({
+            "type": 6,
+            "groups": [
+                {
+                    "id": "6533f8a10000000000000001",
+                    "name": "Season 1",
+                    "order": 1,
+                    "episodes": [{"id": 4800001, "name": "猫猫", "air_date": "2023-10-22"}]
+                },
+                {
+                    "id": "6abfdb678348fc8997c4b3fe",
+                    "name": "Season 3",
+                    "order": 3,
+                    "episodes": [{"id": 7810328, "name": "蝗虫", "air_date": "2026-10-02"}]
+                }
+            ]
+        }))
+        .unwrap()
+    );
+    let mut split_nodes = vec![work.node.clone()];
+    split_nodes.extend(work.seasons.clone());
+    for s in &work.split_seasons {
+        split_nodes.extend(s.episodes.clone());
     }
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(),4);
+    db.catalog_save_nodes(&split_nodes).unwrap();
+
+    let updated = db.catalog_node(&ep_s3.id).unwrap().unwrap();
+    assert_eq!(updated.season_number, Some(3));
+    assert_eq!(updated.episode_number, Some(1));
+    assert_eq!(db.catalog_files(&ep_s3.id).unwrap().len(), 1);
+
+    let merged_shelf = db.catalog_shelf(None).unwrap();
+    assert_eq!(merged_shelf.len(), 1);
+    let season_shelf = db.catalog_season_shelf(None).unwrap();
+    assert_eq!(season_shelf.len(), 2);
+    assert!(season_shelf.iter().all(|s| s.node.kind == Kind::Season));
+}
+
+#[test]
+fn mismatched_databases_are_rejected_without_changes_or_backups() {
+    let dir = std::env::temp_dir().join(format!("erika-format-test-{}", MediaId::new().0));
+    std::fs::create_dir(&dir).unwrap();
+    for (index, version, app) in [
+        (0, 0, 0),
+        (1, 2, 0),
+        (2, 999, super::super::APPLICATION_ID),
+        (3, 1, 7),
+    ] {
+        let path = dir.join(format!("{index}.db"));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE untouched(value TEXT); INSERT INTO untouched VALUES('keep');",
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+            conn.pragma_update(None, "application_id", app).unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        assert!(Db::at(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT value FROM untouched", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "keep"
+        );
+        assert_eq!(
+            conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version
+        );
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 4);
     std::fs::remove_dir_all(dir).unwrap();
 }

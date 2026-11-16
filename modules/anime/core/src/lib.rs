@@ -22,7 +22,8 @@ use bern::CommandError;
 use bern::media::MediaSource;
 use clock::Clock;
 use erika_anime_protocol::anime::{
-    self, BackTo, NextAction, Score, SeasonSource, Show, State, SyncTargets, WatchStatus,
+    self, BackTo, EpisodeFilter, EpisodeSort, NextAction, Score, SeasonSource, Show, State,
+    SyncTargets, WatchStatus,
 };
 use erika_dandanplay::Intro;
 use marks::Level;
@@ -47,6 +48,7 @@ enum Done {
     Reviews(reviews::Finished),
     Synced(sync::Synced),
     RetryWatches,
+    RetryMetadata,
 }
 
 pub struct AnimeEngine {
@@ -144,6 +146,7 @@ impl AnimeEngine {
                 selected_day: 0,
                 opened_from_schedule: false,
                 opened: String::new(),
+                hero_id: String::new(),
                 view_generation: erika_catalog::MediaId::new().0,
                 show: shows::untitled(),
                 details_loading: false,
@@ -153,6 +156,15 @@ impl AnimeEngine {
                 selected_season: String::new(),
                 selected_season_title: String::new(),
                 episodes: Vec::new(),
+                episode_list_open: false,
+                episode_filter: EpisodeFilter::All,
+                episode_sort: EpisodeSort::Ascending,
+                has_seasons: false,
+                listed_episodes: Vec::new(),
+                has_listed_episodes: false,
+                episode_jump_target: String::new(),
+                episode_jump_seq: 0,
+                episode_jump_error: String::new(),
                 first_episode: String::new(),
                 last_episode: String::new(),
                 next_episode: String::new(),
@@ -170,6 +182,8 @@ impl AnimeEngine {
                 sync_targets: SyncTargets::Local,
                 syncing: false,
                 sync_note: String::new(),
+                status_open: false,
+                comments_open: false,
                 rating_open: false,
                 review_open: false,
                 review_loading: false,
@@ -177,6 +191,7 @@ impl AnimeEngine {
                 review_text: String::new(),
                 review_error: String::new(),
                 episode_marking: false,
+                hover_glow: false,
                 can_map: false,
                 mapping_open: false,
                 mapping_targets: Vec::new(),
@@ -336,6 +351,7 @@ impl AnimeEngine {
             self.state.my_score = Score::Unrated;
             self.state.can_rate = false;
             self.state.can_review = false;
+            self.rebuild_listed_episodes();
             return;
         }
         let result = (|| {
@@ -343,34 +359,102 @@ impl AnimeEngine {
                 .db
                 .catalog_node(&erika_catalog::MediaId(self.state.opened.clone()))?
                 .ok_or_else(|| erika_store::catalog::Error::invalid("作品已不存在"))?;
-            let show = content::show(&self.db, &node)?;
-            let mut seasons = self
+            let merge_seasons = self.db.setting("merge_seasons").as_deref() == Some("true");
+            let mut show = content::show(&self.db, &node)?;
+            let children = self
                 .db
                 .catalog_children(&node.id)?
                 .into_iter()
                 .filter(|n| n.kind == erika_catalog::Kind::Season)
+                .collect::<Vec<_>>();
+            // A show on this season's calendar opens on its airing season.
+            let airing = self
+                .on_calendar(&node.id)
+                .then(|| self.calendar_season(&node.id, &children).map(|n| n.id.0))
+                .flatten();
+            let mut seasons = children
+                .iter()
                 .map(|n| anime::SeasonChoice {
-                    id: n.id.0,
-                    title: n.title,
+                    id: n.id.0.clone(),
+                    title: n.title.clone(),
                     number: n.season_number.map_or(-1, i64::from),
                 })
                 .collect::<Vec<_>>();
             seasons.sort_by_key(|s| s.number);
             if !seasons.iter().any(|s| s.id == self.state.selected_season) {
-                self.state.selected_season = seasons
-                    .iter()
-                    .find(|s| s.number > 0)
-                    .or_else(|| seasons.first())
-                    .map(|s| s.id.clone())
+                self.state.selected_season = airing
+                    .clone()
+                    .or_else(|| {
+                        seasons
+                            .iter()
+                            .find(|s| s.number > 0)
+                            .or_else(|| seasons.first())
+                            .map(|s| s.id.clone())
+                    })
                     .unwrap_or_default();
             }
-            self.state.selected_season_title = seasons
+            let selected_node = children
                 .iter()
-                .find(|s| s.id == self.state.selected_season)
-                .map(|s| s.title.clone())
-                .unwrap_or_default();
+                .find(|n| n.id.0 == self.state.selected_season);
+            let on_airing = self.state.selected_season.is_empty()
+                || airing.as_deref() == Some(self.state.selected_season.as_str());
+            let calendar_summary = on_airing
+                .then(|| self.calendar_intro(&node.id).map(|i| i.summary.as_str()))
+                .flatten();
+            show.summary = content::summary(
+                &self.db,
+                &node,
+                if merge_seasons { None } else { selected_node },
+                calendar_summary,
+            );
+            if let Some(selected) = selected_node {
+                let season_rating = reviews::cached_rating(&self.db, &selected.id);
+                if season_rating > 0.0 {
+                    show.rating = season_rating;
+                }
+                if !merge_seasons {
+                    if let Some(date) = clock::parse_date(&selected.date) {
+                        show.premiere = date;
+                        show.has_premiere = true;
+                    }
+                    let (bgm_ja, bgm_cn, bgm_cover) =
+                        reviews::cached_season_meta(&self.db, &selected.id);
+                    if let Some(poster) = selected.artwork.poster.as_ref() {
+                        let images = self.db.catalog_images();
+                        show.poster = MediaSource::new(images.url(Some(poster), 780));
+                    } else if let Some(cover) = bgm_cover {
+                        show.poster = MediaSource::new(cover);
+                    }
+                    if let Some(n) = selected.season_number.filter(|n| *n > 1) {
+                        if node.original_language.eq_ignore_ascii_case("ja") {
+                            if let Some(ja) = bgm_ja {
+                                show.title = ja;
+                            } else if !show.title.contains(&n.to_string()) {
+                                show.title = format!("{} 第{n}期", show.title);
+                            }
+                        } else if let Some(cn) = bgm_cn {
+                            show.title = cn;
+                        } else if !show.title.contains(&n.to_string()) {
+                            show.title = format!("{} 第 {n} 季", show.title);
+                        }
+                    }
+                }
+            }
+            self.state.selected_season_title = if merge_seasons {
+                String::new()
+            } else {
+                selected_node
+                    .and_then(|s| s.season_number.filter(|n| *n > 1))
+                    .map(|n| format!("第 {n} 季"))
+                    .unwrap_or_default()
+            };
             self.state.seasons = seasons;
-            let (episodes, next) = content::film(&self.db, &node, &self.state.selected_season)?;
+            let (episodes, next) =
+                content::film(&self.db, &node, &self.state.selected_season, merge_seasons)?;
+            if !episodes.is_empty() {
+                show.episodes = episodes.len() as i64;
+                show.watched = episodes.iter().filter(|e| e.watched).count() as i64;
+            }
             let marks = self.db.catalog_marks(&node.id)?;
             Ok::<_, erika_store::catalog::Error>((show, episodes, next, marks))
         })();
@@ -396,13 +480,72 @@ impl AnimeEngine {
                 self.state.last_episode = episodes.last().map(|e| e.id.clone()).unwrap_or_default();
                 self.state.episodes = episodes;
                 self.state.show = show;
+                self.rebuild_listed_episodes();
                 self.show_account_marks();
             }
             Err(error) => {
                 self.state.details_failed = true;
                 self.state.details_error = error.message;
+                self.rebuild_listed_episodes();
             }
         }
+    }
+
+    fn rebuild_listed_episodes(&mut self) {
+        self.state.has_seasons = self.state.seasons.len() > 1;
+        let mut items: Vec<anime::Episode> = self
+            .state
+            .episodes
+            .iter()
+            .filter(|e| match self.state.episode_filter {
+                EpisodeFilter::All => true,
+                EpisodeFilter::Available => !matches!(e.note, anime::EpisodeNote::Missing),
+                EpisodeFilter::Unwatched => !e.watched,
+                EpisodeFilter::Watched => e.watched,
+            })
+            .cloned()
+            .collect();
+        if self.state.episode_sort == EpisodeSort::Descending {
+            items.reverse();
+        }
+        self.state.has_listed_episodes = !items.is_empty();
+        self.state.listed_episodes = items;
+    }
+
+    /// Re-evaluate the open show's display summary once a Bangumi summary arrives.
+    pub(crate) fn refresh_opened_summary(&mut self) {
+        let Ok(Some(node)) = self
+            .db
+            .catalog_node(&erika_catalog::MediaId(self.state.opened.clone()))
+        else {
+            return;
+        };
+        let merge_seasons = self.db.setting("merge_seasons").as_deref() == Some("true");
+        let children = self
+            .db
+            .catalog_children(&node.id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|n| n.kind == erika_catalog::Kind::Season)
+            .collect::<Vec<_>>();
+        let airing = self
+            .on_calendar(&node.id)
+            .then(|| self.calendar_season(&node.id, &children).map(|n| n.id.0))
+            .flatten();
+        let selected_node = children
+            .iter()
+            .find(|n| n.id.0 == self.state.selected_season);
+        let on_airing = self.state.selected_season.is_empty()
+            || airing.as_deref() == Some(self.state.selected_season.as_str());
+        let calendar_summary = on_airing
+            .then(|| self.calendar_intro(&node.id).map(|i| i.summary.as_str()))
+            .flatten();
+        self.state.show.summary = content::summary(
+            &self.db,
+            &node,
+            if merge_seasons { None } else { selected_node },
+            calendar_summary,
+        );
     }
 
     /// An account signed in or out: what the details offer changes, and
@@ -457,6 +600,7 @@ impl AnimeEngine {
                 Done::Reviews(result) => self.take_reviews(result),
                 Done::Synced(synced) => self.take_synced(synced),
                 Done::RetryWatches => self.resume_watch_retry(),
+                Done::RetryMetadata => self.resume_metadata_retry(),
             }
         }
     }
@@ -484,18 +628,35 @@ impl AnimeEngine {
 impl anime::Commands for AnimeEngine {
     fn open(&mut self, id: String) -> Result<(), CommandError> {
         self.restore_metadata();
+        let hero_id = id.clone();
         let id = self.resolved_source(&id).map(|id| id.0).unwrap_or(id);
-        self.find_media(&id)?;
+        let (work_id, initial_season) = if let Ok(parsed) = erika_catalog::MediaId::parse(&id)
+            && let Ok(Some(node)) = self.db.catalog_node(&parsed)
+            && node.kind == erika_catalog::Kind::Season
+        {
+            (node.root.0, node.id.0)
+        } else {
+            (id, String::new())
+        };
+        self.find_media(&work_id)?;
         self.state.opened_from_schedule = false;
         self.state.back = BackTo::Home;
-        self.state.opened = id;
+        self.state.opened = work_id;
+        self.state.hero_id = hero_id;
         self.state.episodes = Vec::new();
-        self.state.selected_season.clear();
+        self.state.selected_season = initial_season;
         self.state.seasons.clear();
         self.state.sync_note.clear();
+        self.state.status_open = false;
+        self.state.comments_open = false;
         self.state.rating_open = false;
         self.state.review_open = false;
         self.state.mapping_open = false;
+        self.state.episode_list_open = false;
+        self.state.episode_filter = EpisodeFilter::All;
+        self.state.episode_sort = EpisodeSort::Ascending;
+        self.state.episode_jump_target.clear();
+        self.state.episode_jump_error.clear();
         self.state.review_text.clear();
         self.state.review_error.clear();
         self.syncs.change_view(&mut self.state);
@@ -538,9 +699,13 @@ impl anime::Commands for AnimeEngine {
         self.syncs.change_view(&mut self.state);
         self.state.review_loading = false;
         self.state.review_saving = false;
+        self.state.status_open = false;
+        self.state.comments_open = false;
         self.state.rating_open = false;
         self.state.review_open = false;
         self.state.mapping_open = false;
+        self.state.episode_list_open = false;
+        self.state.episode_jump_error.clear();
         self.reviews.cancel();
         Ok(())
     }
@@ -584,6 +749,7 @@ impl anime::Commands for AnimeEngine {
     }
 
     fn set_status(&mut self, status: WatchStatus) -> Result<(), CommandError> {
+        self.state.status_open = false;
         if let Some(level) = Level::of_status(&status) {
             self.sync_intent(Intent::Status(level))?;
         }
@@ -600,6 +766,28 @@ impl anime::Commands for AnimeEngine {
         Ok(())
     }
 
+    fn show_status(&mut self, open: bool) -> Result<(), CommandError> {
+        let showing = open && !self.state.opened.is_empty();
+        if showing {
+            self.state.comments_open = false;
+            self.state.review_open = false;
+            self.state.mapping_open = false;
+        }
+        self.state.status_open = showing;
+        Ok(())
+    }
+
+    fn show_comments(&mut self, open: bool) -> Result<(), CommandError> {
+        let showing = open && !self.state.opened.is_empty();
+        if showing {
+            self.state.status_open = false;
+            self.state.review_open = false;
+            self.state.mapping_open = false;
+        }
+        self.state.comments_open = showing;
+        Ok(())
+    }
+
     fn show_rating(&mut self, open: bool) -> Result<(), CommandError> {
         self.state.rating_open = open && !self.state.opened.is_empty();
         Ok(())
@@ -612,6 +800,9 @@ impl anime::Commands for AnimeEngine {
         self.state.review_loading = false;
         self.state.review_saving = false;
         if self.state.review_open {
+            self.state.status_open = false;
+            self.state.comments_open = false;
+            self.state.mapping_open = false;
             self.state.review_loading = true;
             if let Err(error) = self.sync_intent(Intent::ReadReview) {
                 self.state.review_loading = false;
@@ -678,12 +869,20 @@ impl anime::Commands for AnimeEngine {
         Ok(())
     }
 
+    fn set_hover_glow(&mut self, enabled: bool) -> Result<(), CommandError> {
+        self.state.hover_glow = enabled;
+        Ok(())
+    }
+
     fn show_mappings(&mut self, open: bool) -> Result<(), CommandError> {
         if !open {
             self.state.mapping_open = false;
             self.provider_editor = Default::default();
             return Ok(());
         }
+        self.state.status_open = false;
+        self.state.comments_open = false;
+        self.state.review_open = false;
         let result = self.open_provider_editor();
         self.mapping_result(result)
     }
@@ -709,6 +908,11 @@ impl anime::Commands for AnimeEngine {
         self.mapping_result(result)
     }
 
+    fn confirm_provider_mapping(&mut self, row: String) -> Result<(), CommandError> {
+        let result = self.confirm_mapping(&row);
+        self.mapping_result(result)
+    }
+
     fn sync_marks(&mut self) -> Result<(), CommandError> {
         self.sync_intent(Intent::Read)?;
         if let Ok(media) = self.account_media() {
@@ -719,8 +923,29 @@ impl anime::Commands for AnimeEngine {
     }
 
     fn select_season(&mut self, id: String) -> Result<(), CommandError> {
-        if !self.state.seasons.iter().any(|s| s.id == id) {
+        let Some(season_num) = self
+            .state
+            .seasons
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.number)
+        else {
             return Err(CommandError::new("unknown_season", "没有这一季"));
+        };
+        let merge_seasons = self.db.setting("merge_seasons").as_deref() == Some("true");
+        if merge_seasons {
+            self.state.selected_season = id;
+            if let Some(target) = self
+                .state
+                .episodes
+                .iter()
+                .find(|e| e.season == season_num)
+                .map(|e| e.id.clone())
+            {
+                self.state.episode_jump_target = target;
+                self.state.episode_jump_seq += 1;
+            }
+            return Ok(());
         }
         self.syncs.change_view(&mut self.state);
         self.state.review_open = false;
@@ -729,6 +954,9 @@ impl anime::Commands for AnimeEngine {
         self.state.review_loading = false;
         self.state.review_saving = false;
         self.state.review_text.clear();
+        if self.state.back == BackTo::Library {
+            self.state.hero_id = id.clone();
+        }
         self.state.selected_season = id;
         self.show_opened();
         self.refresh_metadata();
@@ -758,6 +986,110 @@ impl anime::Commands for AnimeEngine {
             false,
         );
         Ok(())
+    }
+
+    fn show_episode_list(&mut self, open: bool) -> Result<(), CommandError> {
+        if open {
+            self.state.status_open = false;
+            self.state.comments_open = false;
+            self.state.review_open = false;
+            self.state.mapping_open = false;
+        }
+        self.state.episode_list_open = open;
+        self.state.episode_jump_error.clear();
+        if open {
+            self.rebuild_listed_episodes();
+        }
+        Ok(())
+    }
+
+    fn set_episode_filter(&mut self, filter: EpisodeFilter) -> Result<(), CommandError> {
+        self.state.episode_filter = filter;
+        self.state.episode_jump_error.clear();
+        self.rebuild_listed_episodes();
+        Ok(())
+    }
+
+    fn set_episode_sort(&mut self, sort: EpisodeSort) -> Result<(), CommandError> {
+        self.state.episode_sort = sort;
+        self.rebuild_listed_episodes();
+        Ok(())
+    }
+
+    fn jump_to_episode(&mut self, input: String) -> Result<(), CommandError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            self.state.episode_jump_error.clear();
+            return Ok(());
+        }
+        let Some((season_hint, target_number)) = parse_episode_jump(trimmed) else {
+            self.state.episode_jump_error = "请输入正整数集数".into();
+            return Ok(());
+        };
+        let merge_seasons = self.db.setting("merge_seasons").as_deref() == Some("true");
+        if !merge_seasons
+            && let Some(season_num) = season_hint
+            && let Some(choice) = self.state.seasons.iter().find(|s| s.number == season_num)
+            && choice.id != self.state.selected_season
+        {
+            let target_season = choice.id.clone();
+            let _ = self.select_season(target_season);
+        }
+        let found = if merge_seasons {
+            if let Some(season_num) = season_hint {
+                self.state
+                    .episodes
+                    .iter()
+                    .find(|e| e.season == season_num && e.number == target_number)
+                    .map(|e| e.id.clone())
+            } else {
+                let idx = usize::try_from(target_number).ok();
+                idx.filter(|i| *i >= 1 && *i <= self.state.episodes.len())
+                    .map(|i| self.state.episodes[i - 1].id.clone())
+                    .or_else(|| {
+                        self.state
+                            .episodes
+                            .iter()
+                            .find(|e| e.number == target_number)
+                            .map(|e| e.id.clone())
+                    })
+            }
+        } else {
+            self.state
+                .episodes
+                .iter()
+                .find(|e| e.number == target_number)
+                .map(|e| e.id.clone())
+        };
+        let Some(found) = found else {
+            self.state.episode_jump_error = format!("没有第 {target_number} 话");
+            return Ok(());
+        };
+        self.state.episode_jump_error.clear();
+        if !self.state.listed_episodes.iter().any(|e| e.id == found) {
+            self.state.episode_filter = EpisodeFilter::All;
+            self.rebuild_listed_episodes();
+        }
+        self.state.episode_jump_target = found;
+        self.state.episode_jump_seq += 1;
+        Ok(())
+    }
+
+    fn play_listed_episode(&mut self, id: String) -> Result<(), CommandError> {
+        if !self.state.episodes.iter().any(|e| e.id == id) {
+            return Err(CommandError::new("unknown_episode", "没有这条影片或分集"));
+        }
+        let has_file = content::file(&self.db, &erika_catalog::MediaId(id.clone()))
+            .map_err(content::command)?
+            .is_some();
+        self.state.episode_list_open = false;
+        if has_file {
+            self.play_episode(id)
+        } else {
+            self.state.episode_jump_target = id;
+            self.state.episode_jump_seq += 1;
+            Ok(())
+        }
     }
 
     fn account_changed(&mut self, signed_in: bool) -> Result<(), CommandError> {
@@ -798,6 +1130,7 @@ impl anime::Commands for AnimeEngine {
 
     fn refresh_comments(&mut self) -> Result<(), CommandError> {
         if !self.state.comments_loading {
+            self.reviews.reset_bridge();
             self.load_reviews();
         }
         Ok(())
@@ -843,6 +1176,20 @@ impl anime::Engine for AnimeEngine {
             self.refresh();
             self.sync_all_again();
         }
+    }
+}
+
+/// Parse `"12"`, `"E12"`, `"S01E12"`, or `"第12集"` into `(season_hint, episode_number)`.
+fn parse_episode_jump(input: &str) -> Option<(Option<i64>, i64)> {
+    let groups: Vec<i64> = input
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse::<i64>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    match groups.as_slice() {
+        [episode] if *episode > 0 => Some((None, *episode)),
+        [season, episode] if *season >= 0 && *episode > 0 => Some((Some(*season), *episode)),
+        _ => None,
     }
 }
 

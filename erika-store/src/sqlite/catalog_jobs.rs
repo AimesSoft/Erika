@@ -10,7 +10,15 @@ use rusqlite::{OptionalExtension, params};
 fn job_state(state: &str) -> bool {
     matches!(
         state,
-        "queued" | "running" | "retry" | "pending" | "bound" | "completed" | "failed" | "cancelled" | "stale"
+        "queued"
+            | "running"
+            | "retry"
+            | "pending"
+            | "bound"
+            | "completed"
+            | "failed"
+            | "cancelled"
+            | "stale"
     )
 }
 impl Db {
@@ -177,7 +185,8 @@ impl Db {
                     updated_at: r.get(3)?,
                     revision: {
                         let value: i64 = r.get(4)?;
-                        u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(4, value))?
+                        u64::try_from(value)
+                            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(4, value))?
                     },
                 })
             })?

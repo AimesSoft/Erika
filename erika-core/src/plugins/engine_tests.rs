@@ -79,8 +79,12 @@ fn a_nipaplay_plugin_runs_as_it_did_there() {
     std::fs::write(&script, ECHO).unwrap();
     let mut engine = ErikaEngine::default();
     engine.plugins_wake();
-    engine.import_plugin_command(MediaSource::file(&script)).unwrap();
-    settle(&mut engine, |engine| row(engine, "test.echo").is_some_and(|p| p.loaded));
+    engine
+        .import_plugin_command(MediaSource::file(&script))
+        .unwrap();
+    settle(&mut engine, |engine| {
+        row(engine, "test.echo").is_some_and(|p| p.loaded)
+    });
 
     // Imported, turned on and loaded, its version requirement dropped.
     let plugin = row(&engine, "test.echo").unwrap();
@@ -95,13 +99,30 @@ fn a_nipaplay_plugin_runs_as_it_did_there() {
 
     // Its settings: a button, a switch and a text field.
     engine.open_plugin_command("test.echo".into()).unwrap();
-    let kinds: Vec<_> = engine.state.plugin_panel.entries.iter().map(|e| e.kind.clone()).collect();
-    assert_eq!(kinds, [PluginEntryKind::Action, PluginEntryKind::Switch, PluginEntryKind::Text]);
+    let kinds: Vec<_> = engine
+        .state
+        .plugin_panel
+        .entries
+        .iter()
+        .map(|e| e.kind.clone())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            PluginEntryKind::Action,
+            PluginEntryKind::Switch,
+            PluginEntryKind::Text
+        ]
+    );
     assert_eq!(engine.state.plugin_panel.entries[2].text, "世界");
     assert_eq!(engine.state.plugin_panel.entries[2].hint, "谁");
 
-    engine.set_plugin_text_command("name".into(), "Erika".into()).unwrap();
-    engine.set_plugin_switch_command("loud".into(), true).unwrap();
+    engine
+        .set_plugin_text_command("name".into(), "Erika".into())
+        .unwrap();
+    engine
+        .set_plugin_switch_command("loud".into(), true)
+        .unwrap();
     engine.plugin_action_command("hello".into()).unwrap();
     settle(&mut engine, |engine| engine.state.plugin_panel.has_message);
     assert_eq!(engine.state.plugin_panel.message_title, "你好");
@@ -117,7 +138,9 @@ fn a_nipaplay_plugin_runs_as_it_did_there() {
     ));
 
     // Turned off, it stops; uninstalled, its folder goes.
-    engine.set_plugin_enabled_command("test.echo".into(), false).unwrap();
+    engine
+        .set_plugin_enabled_command("test.echo".into(), false)
+        .unwrap();
     assert!(!engine.plugins.block_words().contains(&"剧透".to_string()));
     engine.uninstall_plugin_command("test.echo".into()).unwrap();
     assert!(!folder.join("test.echo").exists());
@@ -138,14 +161,18 @@ fn the_real_market_installs_and_loads() {
     engine.plugins_wake();
     engine.plugins.listings = listings.clone();
     for listing in &listings {
-        engine.install_plugin_command(listing.pack.id.clone()).unwrap();
+        engine
+            .install_plugin_command(listing.pack.id.clone())
+            .unwrap();
     }
     settle(&mut engine, |engine| {
         engine.plugins.busy.is_empty()
             && engine.plugins.installed.len() == listings.len()
-            && engine.plugins.installed.iter().all(|p| {
-                p.loaded || !p.error.is_empty() || !p.pack.unsupported().is_empty()
-            })
+            && engine
+                .plugins
+                .installed
+                .iter()
+                .all(|p| p.loaded || !p.error.is_empty() || !p.pack.unsupported().is_empty())
     });
     for plugin in &engine.plugins.installed {
         println!(
@@ -155,7 +182,11 @@ fn the_real_market_installs_and_loads() {
             if !plugin.pack.unsupported().is_empty() {
                 format!("unsupported: {:?}", plugin.pack.unsupported())
             } else if plugin.loaded {
-                format!("loaded, {} entries, {} block words", plugin.entries.len(), plugin.block_words.len())
+                format!(
+                    "loaded, {} entries, {} block words",
+                    plugin.entries.len(),
+                    plugin.block_words.len()
+                )
             } else {
                 format!("failed: {}", plugin.error)
             }
@@ -171,12 +202,18 @@ fn erikas_own_plugins_install_and_load() {
     folder();
     let repo = std::env::var("ERIKA_PLUGINS_REPO").expect("ERIKA_PLUGINS_REPO");
     let listings = store::read_index(&format!("{repo}/plugins.json")).unwrap();
-    assert!(listings.iter().all(|listing| matches!(listing.files, store::Files::Folder(_))));
+    assert!(
+        listings
+            .iter()
+            .all(|listing| matches!(listing.files, store::Files::Folder(_)))
+    );
     let mut engine = ErikaEngine::default();
     engine.plugins_wake();
     engine.plugins.listings = listings.clone();
     for listing in &listings {
-        engine.install_plugin_command(listing.pack.id.clone()).unwrap();
+        engine
+            .install_plugin_command(listing.pack.id.clone())
+            .unwrap();
     }
     settle(&mut engine, |engine| {
         engine.plugins.busy.is_empty()
@@ -208,8 +245,20 @@ fn erikas_own_plugins_install_and_load() {
     // The automatic offset looks past Netflix's ident and the black after it.
     assert_eq!(extended.opening, 30.0);
     assert_eq!(extended.colors.len(), 9);
-    assert!(engine.state.speeds.iter().any(|speed| speed.label == "5.0×"));
-    assert!(engine.state.speeds.iter().any(|speed| speed.label == "0.25×"));
+    assert!(
+        engine
+            .state
+            .speeds
+            .iter()
+            .any(|speed| speed.label == "5.0×")
+    );
+    assert!(
+        engine
+            .state
+            .speeds
+            .iter()
+            .any(|speed| speed.label == "0.25×")
+    );
     assert!(engine.state.download_quick_select);
 }
 
@@ -244,8 +293,12 @@ fn a_plugin_resolves_a_link_in_rounds() {
     let kernel = Arc::new(crate::player::tests::FakeKernel::default());
     engine.kernel = Some(kernel.clone());
     engine.plugins_wake();
-    engine.import_plugin_command(MediaSource::file(&script)).unwrap();
-    settle(&mut engine, |engine| row(engine, "test.resolver").is_some_and(|p| p.loaded));
+    engine
+        .import_plugin_command(MediaSource::file(&script))
+        .unwrap();
+    settle(&mut engine, |engine| {
+        row(engine, "test.resolver").is_some_and(|p| p.loaded)
+    });
 
     erika::Commands::open_link(&mut engine, "https://example.com/watch/1".into()).unwrap();
     settle(&mut engine, |engine| engine.state.link_choosing);
@@ -258,14 +311,20 @@ fn a_plugin_resolves_a_link_in_rounds() {
     assert_eq!(engine.state.title, "第一集");
     assert_eq!(
         kernel.opens.lock().unwrap().as_slice(),
-        &[("https://cdn.example.com/a.mp4".into(), 0., vec![("Referer".into(), "https://example.com/".into())])]
+        &[(
+            "https://cdn.example.com/a.mp4".into(),
+            0.,
+            vec![("Referer".into(), "https://example.com/".into())]
+        )]
     );
 
     // Not its link: it plays as it is.
     erika::Commands::open_link(&mut engine, "https://other.example/v/clip.mp4".into()).unwrap();
     settle(&mut engine, |engine| !engine.state.link_resolving);
     assert_eq!(engine.state.title, "clip");
-    engine.uninstall_plugin_command("test.resolver".into()).unwrap();
+    engine
+        .uninstall_plugin_command("test.resolver".into())
+        .unwrap();
 }
 
 /// A kernel that keeps the comments it is given, by track.
@@ -340,8 +399,12 @@ fn comments_pass_along_the_plugins_and_their_block_lists() {
     engine.kernel = Some(shown.clone());
     engine.state.video = true;
     engine.plugins_wake();
-    engine.import_plugin_command(MediaSource::file(folder.join("trim.js"))).unwrap();
-    engine.import_plugin_command(MediaSource::file(folder.join("hide.js"))).unwrap();
+    engine
+        .import_plugin_command(MediaSource::file(folder.join("trim.js")))
+        .unwrap();
+    engine
+        .import_plugin_command(MediaSource::file(folder.join("hide.js")))
+        .unwrap();
     settle(&mut engine, |engine| {
         ["test.trim", "test.hide"]
             .iter()
@@ -351,11 +414,18 @@ fn comments_pass_along_the_plugins_and_their_block_lists() {
     let kernel: Arc<dyn crate::kernel::Kernel> = shown.clone();
     let contents = r#"[{"time":1,"content":"好看"},{"time":2,"content":"哈哈哈"},{"time":3,"content":"前方剧透"}]"#;
     // The block list hides at once; the plugin's turn follows.
-    assert_eq!(engine.load_danmaku(&kernel, "弹弹play", contents).unwrap(), 2);
-    settle(&mut engine, |_| shown.0.lock().unwrap()["弹弹play"] == ["好看"]);
+    assert_eq!(
+        engine.load_danmaku(&kernel, "弹弹play", contents).unwrap(),
+        2
+    );
+    settle(&mut engine, |_| {
+        shown.0.lock().unwrap()["弹弹play"] == ["好看"]
+    });
 
     // Turned off, what it took out comes back.
-    engine.set_plugin_enabled_command("test.trim".into(), false).unwrap();
+    engine
+        .set_plugin_enabled_command("test.trim".into(), false)
+        .unwrap();
     assert_eq!(shown.0.lock().unwrap()["弹弹play"], ["好看", "哈哈哈"]);
     for id in ["test.trim", "test.hide"] {
         engine.uninstall_plugin_command(id.into()).unwrap();
@@ -393,14 +463,24 @@ fn a_plugin_puts_its_settings_in_playback_settings_and_draws_on_the_picture() {
     engine.state.duration = 10.0;
     engine.state.progress = 0.5;
     engine.plugins_wake();
-    engine.import_plugin_command(MediaSource::file(folder.join("overlay.js"))).unwrap();
-    settle(&mut engine, |engine| !engine.state.player.progress_strip.is_empty());
+    engine
+        .import_plugin_command(MediaSource::file(folder.join("overlay.js")))
+        .unwrap();
+    settle(&mut engine, |engine| {
+        !engine.state.player.progress_strip.is_empty()
+    });
 
     // Its legacy placement routes two settings to playback settings; the third stays on its page.
     let menu = &engine.state.player.plugin_menu;
     assert_eq!(menu.len(), 2);
-    assert_eq!((menu[0].kind.clone(), menu[0].on), (PluginEntryKind::Switch, true));
-    assert_eq!((menu[1].kind.clone(), menu[1].color.clone()), (PluginEntryKind::Color, PluginColor::Red));
+    assert_eq!(
+        (menu[0].kind.clone(), menu[0].on),
+        (PluginEntryKind::Switch, true)
+    );
+    assert_eq!(
+        (menu[1].kind.clone(), menu[1].color.clone()),
+        (PluginEntryKind::Color, PluginColor::Red)
+    );
     assert!(row(&engine, "test.overlay").unwrap().has_settings);
     assert_eq!(engine.state.player.progress_strip_color, PluginColor::Red);
     assert_eq!(engine.state.player.progress_strip[200], 1.0);
@@ -417,12 +497,16 @@ fn a_plugin_puts_its_settings_in_playback_settings_and_draws_on_the_picture() {
     engine
         .set_plugin_menu_color_command("test.overlay".into(), "color".into(), PluginColor::Green)
         .unwrap();
-    settle(&mut engine, |engine| engine.state.player.danmaku_density_color == PluginColor::Green);
+    settle(&mut engine, |engine| {
+        engine.state.player.danmaku_density_color == PluginColor::Green
+    });
     assert_eq!(engine.state.player.plugin_menu[1].color, PluginColor::Green);
     engine
         .set_plugin_menu_switch_command("test.overlay".into(), "show".into(), false)
         .unwrap();
-    settle(&mut engine, |engine| engine.state.player.progress_strip.is_empty());
+    settle(&mut engine, |engine| {
+        engine.state.player.progress_strip.is_empty()
+    });
     assert!(engine.state.player.danmaku_density.is_empty());
     assert!(!engine.state.player.plugin_menu[0].on);
     assert!(
@@ -431,7 +515,9 @@ fn a_plugin_puts_its_settings_in_playback_settings_and_draws_on_the_picture() {
             .is_err()
     );
 
-    engine.uninstall_plugin_command("test.overlay".into()).unwrap();
+    engine
+        .uninstall_plugin_command("test.overlay".into())
+        .unwrap();
     assert!(engine.state.player.plugin_menu.is_empty());
     assert!(!engine.state.player.plugin_menu_shown);
 }
@@ -443,7 +529,8 @@ fn separate_overlay_plugins_keep_their_progress_density_and_settings() {
         ("test.strip", "progressStrip", "green", "playerMenu"),
         ("test.density", "danmakuDensity", "red", "danmakuMenu"),
     ] {
-        let script = format!(r#"
+        let script = format!(
+            r#"
 const pluginManifest = {{
   id: '{id}', name: '{id}', version: '1.0.0', minHostVersion: '1.0.0',
   permissions: ['player.overlay'],
@@ -454,7 +541,8 @@ var pluginUIEntries = [
 function apply() {{ extend.{extend}(settings.getSwitch('show', true) ? '{color}' : null); }}
 function pluginOnInitialize() {{ apply(); }}
 function pluginHandleUIAction(id) {{ apply(); return null; }}
-"#);
+"#
+        );
         std::fs::write(folder.join(format!("{id}.js")), script).unwrap();
     }
     let mut engine = ErikaEngine::default();
@@ -465,34 +553,63 @@ function pluginHandleUIAction(id) {{ apply(); return null; }}
     engine.state.progress = 0.5;
     engine.plugins_wake();
     for id in ["test.strip", "test.density"] {
-        engine.import_plugin_command(MediaSource::file(folder.join(format!("{id}.js")))).unwrap();
+        engine
+            .import_plugin_command(MediaSource::file(folder.join(format!("{id}.js"))))
+            .unwrap();
     }
-    settle(&mut engine, |engine| engine.state.player.plugin_menu.len() == 2
-        && engine.plugins.extensions().density == Some(PluginColor::Red)
-        && engine.state.player.progress_strip_color == PluginColor::Green);
+    settle(&mut engine, |engine| {
+        engine.state.player.plugin_menu.len() == 2
+            && engine.plugins.extensions().density == Some(PluginColor::Red)
+            && engine.state.player.progress_strip_color == PluginColor::Green
+    });
     let kernel: Arc<dyn crate::kernel::Kernel> = shown;
-    engine.load_danmaku(&kernel, "本地", r#"[{"time":1.5,"content":"好看"}]"#).unwrap();
+    engine
+        .load_danmaku(&kernel, "本地", r#"[{"time":1.5,"content":"好看"}]"#)
+        .unwrap();
     assert!(engine.state.player.progress_strip_shown);
     assert!(engine.state.player.danmaku_density_shown);
-    assert_eq!(engine.state.player.progress_strip, super::overlays::strip(0.5));
+    assert_eq!(
+        engine.state.player.progress_strip,
+        super::overlays::strip(0.5)
+    );
     assert_eq!(engine.state.player.plugin_menu[0].id, "show");
     assert_eq!(engine.state.player.plugin_menu[1].id, "show");
-    assert_ne!(engine.state.player.plugin_menu[0].key, engine.state.player.plugin_menu[1].key);
+    assert_ne!(
+        engine.state.player.plugin_menu[0].key,
+        engine.state.player.plugin_menu[1].key
+    );
     assert!(engine.state.player.plugin_menu_shown);
 
-    engine.set_plugin_menu_switch_command("test.density".into(), "show".into(), false).unwrap();
-    settle(&mut engine, |engine| !engine.state.player.danmaku_density_shown);
+    engine
+        .set_plugin_menu_switch_command("test.density".into(), "show".into(), false)
+        .unwrap();
+    settle(&mut engine, |engine| {
+        !engine.state.player.danmaku_density_shown
+    });
     assert!(engine.state.player.progress_strip_shown);
     engine.state.progress = 0.75;
     engine.refresh_progress_strip();
-    assert_eq!(engine.state.player.progress_strip, super::overlays::strip(0.75));
+    assert_eq!(
+        engine.state.player.progress_strip,
+        super::overlays::strip(0.75)
+    );
 
-    engine.set_plugin_menu_switch_command("test.density".into(), "show".into(), true).unwrap();
-    settle(&mut engine, |engine| engine.state.player.danmaku_density_shown);
-    engine.set_plugin_menu_switch_command("test.strip".into(), "show".into(), false).unwrap();
-    settle(&mut engine, |engine| !engine.state.player.progress_strip_shown);
+    engine
+        .set_plugin_menu_switch_command("test.density".into(), "show".into(), true)
+        .unwrap();
+    settle(&mut engine, |engine| {
+        engine.state.player.danmaku_density_shown
+    });
+    engine
+        .set_plugin_menu_switch_command("test.strip".into(), "show".into(), false)
+        .unwrap();
+    settle(&mut engine, |engine| {
+        !engine.state.player.progress_strip_shown
+    });
     assert!(engine.state.player.danmaku_density_shown);
-    engine.uninstall_plugin_command("test.strip".into()).unwrap();
+    engine
+        .uninstall_plugin_command("test.strip".into())
+        .unwrap();
     assert_eq!(engine.state.player.plugin_menu.len(), 1);
     assert!(engine.state.player.danmaku_density_shown);
 }

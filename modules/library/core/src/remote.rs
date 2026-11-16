@@ -254,7 +254,13 @@ mod tests {
         assert!(!files[0].url.contains('?'));
         assert!(engine.db.anime(14198).unwrap().image.is_empty());
         // The video not matched is listed by its file name.
-        assert!(engine.state.unmatched.iter().any(|f| f.name == "unknown [01].mkv"));
+        assert!(
+            engine
+                .state
+                .unmatched
+                .iter()
+                .any(|f| f.name == "unknown [01].mkv")
+        );
         assert_eq!(engine.state.unmatched[0].place, "书房的电脑");
         // Until TMDB resolves them, every file remains readable at the source root.
         engine.open_source(source).unwrap();
@@ -266,11 +272,29 @@ mod tests {
         for file in &engine.state.folder.files {
             assert!(file.readable && !file.matched && file.show.is_empty());
             let address = entries.iter().find(|entry| entry.key == file.key).unwrap();
-            assert!(address.url.starts_with(&format!("{base}/api/v1/stream/id/")));
+            assert!(
+                address
+                    .url
+                    .starts_with(&format!("{base}/api/v1/stream/id/"))
+            );
             assert!(!address.url.contains('?'));
         }
-        assert!(engine.state.folder.files.iter().any(|f| f.name == "unknown [01].mkv"));
-        assert!(engine.state.folder.files.iter().any(|f| f.name == "[Zombieland Saga][03][BIG5][1080P].mp4"));
+        assert!(
+            engine
+                .state
+                .folder
+                .files
+                .iter()
+                .any(|f| f.name == "unknown [01].mkv")
+        );
+        assert!(
+            engine
+                .state
+                .folder
+                .files
+                .iter()
+                .any(|f| f.name == "[Zombieland Saga][03][BIG5][1080P].mp4")
+        );
 
         // Removing it forgets its key.
         engine.remove_source(source).unwrap();
@@ -282,13 +306,28 @@ mod tests {
     #[test]
     fn source_files_play_before_matching_and_removed_rows_cannot_play() {
         let (_metadata, mut engine) = crate::tests::engine();
-        let source = engine.db.add_source("dandanplay", "电影目录", "https://source.example.invalid", "movie").unwrap();
-        engine.import_remote(source, &Snapshot {
-            videos: videos("https://source.example.invalid", &items()), token: String::new(),
-        });
+        let source = engine
+            .db
+            .add_source(
+                "dandanplay",
+                "电影目录",
+                "https://source.example.invalid",
+                "movie",
+            )
+            .unwrap();
+        engine.import_remote(
+            source,
+            &Snapshot {
+                videos: videos("https://source.example.invalid", &items()),
+                token: String::new(),
+            },
+        );
         engine.load();
         engine.open_source(source).unwrap();
-        assert_eq!(engine.state.folder.content, erika_library_protocol::library::SourceContent::Movie);
+        assert_eq!(
+            engine.state.folder.content,
+            erika_library_protocol::library::SourceContent::Movie
+        );
         let entries = engine.db.entries(Some(source));
         for entry in &entries {
             let file = entry.file.unwrap();
@@ -299,10 +338,18 @@ mod tests {
         assert!(engine.play_file(i64::MAX).is_err());
         let unreadable = "https://source.example.invalid/unreadable.mp4";
         engine.db.saw(source, unreadable, 0, 0, None);
-        let key = engine.db.entries(Some(source)).into_iter().find(|entry| entry.url == unreadable).unwrap().key;
+        let key = engine
+            .db
+            .entries(Some(source))
+            .into_iter()
+            .find(|entry| entry.url == unreadable)
+            .unwrap()
+            .key;
         assert!(engine.play_file(key).is_err());
         engine.remove_source(source).unwrap();
-        for entry in entries { assert!(engine.play_file(entry.key).is_err()); }
+        for entry in entries {
+            assert!(engine.play_file(entry.key).is_err());
+        }
     }
 
     #[test]

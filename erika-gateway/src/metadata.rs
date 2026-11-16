@@ -27,6 +27,7 @@ struct Inner {
     key: Option<String>,
     client: reqwest::Client,
     cache: Mutex<HashMap<String, Cached>>,
+    seasons: Mutex<HashMap<String, Vec<u8>>>,
     rates: Mutex<HashMap<String, (Instant, u32)>>,
     slots: Semaphore,
 }
@@ -69,12 +70,59 @@ impl Metadata {
                 .build()
                 .map_err(|_| "HTTP client failed")?,
             cache: Mutex::default(),
+            seasons: Mutex::default(),
             rates: Mutex::default(),
             slots: Semaphore::new(8),
         })))
     }
     pub fn configured(&self) -> bool {
         self.0.bearer.is_some() || self.0.key.is_some()
+    }
+    pub fn set_season_bundle(&self, language: &str, bundle: &erika_catalog::tmdb::SeasonBundle) {
+        let fetched_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if let Ok(bytes) = serde_json::to_vec(
+            &json!({"schema_version": 1, "fetched_at": fetched_at, "data": bundle}),
+        ) {
+            self.0
+                .seasons
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(language.into(), bytes);
+        }
+    }
+    pub fn season_bundle_bytes(&self, language: &str) -> Vec<u8> {
+        if let Some(bytes) = self
+            .0
+            .seasons
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(language)
+            .cloned()
+        {
+            return bytes;
+        }
+        let fetched_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "fetched_at": fetched_at,
+            "data": erika_catalog::tmdb::SeasonBundle::default(),
+        }))
+        .unwrap_or_default()
+    }
+    pub async fn tmdb_data(&self, path: &str, query: &[(&str, &str)]) -> Option<Value> {
+        let encoded = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(query.iter().copied())
+            .finish();
+        let route = route(path, &encoded).ok()?;
+        let bytes = self.request(route).await.ok()?;
+        let envelope: Value = serde_json::from_slice(&bytes).ok()?;
+        envelope.get("data").cloned()
     }
     pub fn router(self) -> Router {
         Router::new()
@@ -95,7 +143,9 @@ impl Metadata {
             return false;
         }
         let mut allowed = true;
-        for (key, limit) in [("global", 1200), (ip, 120)] {
+        // A device opening the season calendar resolves about a hundred shows
+        // at once (search, details, images); answers are cached for an hour.
+        for (key, limit) in [("global", 1200), (ip, 600)] {
             let (_, count) = rates.entry(key.into()).or_insert((Instant::now(), 0));
             *count = count.saturating_add(1);
             allowed &= *count <= limit;
@@ -119,7 +169,11 @@ impl Metadata {
         {
             return Ok(cached.bytes.clone());
         }
-        let _permit = self.0.slots.try_acquire().map_err(|_| Failure::busy())?;
+        // Queue briefly for an upstream slot instead of refusing a burst.
+        let _permit = tokio::time::timeout(Duration::from_secs(8), self.0.slots.acquire())
+            .await
+            .map_err(|_| Failure::busy())?
+            .map_err(|_| Failure::busy())?;
         let base = match route.upstream {
             Upstream::Tmdb => &self.0.base,
             Upstream::Bangumi => &self.0.bangumi,
@@ -314,7 +368,35 @@ async fn metadata(
         return Failure::busy().into_response();
     }
     if path == "capabilities" {
-        return cors(Json(json!({"schema_version":1,"data":{"tmdb":service.configured(),"images":service.configured(),"bangumi_reviews":true,"credentials_required":false}})).into_response());
+        return cors(Json(json!({"schema_version":1,"data":{"tmdb":service.configured(),"images":service.configured(),"season":service.configured(),"bangumi_reviews":true,"credentials_required":false}})).into_response());
+    }
+    if path == "season" {
+        if !service.configured() {
+            return Failure::disabled().into_response();
+        }
+        let mut language = String::from("zh-CN");
+        for (key, value) in
+            url::form_urlencoded::parse(query.as_deref().unwrap_or_default().as_bytes())
+        {
+            if key != "language"
+                || value.is_empty()
+                || value.len() > 16
+                || !value.bytes().all(|c| c.is_ascii_alphabetic() || c == b'-')
+            {
+                return Failure::bad().into_response();
+            }
+            language = value.into_owned();
+        }
+        let mut response = service.season_bundle_bytes(&language).into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=300"),
+        );
+        return cors(response);
     }
     let route = match route(&path, query.as_deref().unwrap_or_default()) {
         Ok(route) => route,
@@ -344,6 +426,12 @@ fn positive(value: &str) -> bool {
 }
 fn position(value: &str) -> bool {
     value.parse::<u32>().is_ok_and(|n| n <= 10000) && value.bytes().all(|c| c.is_ascii_digit())
+}
+fn hex_group_id(value: &str) -> bool {
+    value.len() == 24
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 fn route(path: &str, query: &str) -> Result<Route, Failure> {
     if path.len() > 256 || query.len() > 2048 {
@@ -412,6 +500,12 @@ fn route(path: &str, query: &str) -> Result<Route, Failure> {
             format!("tv/{id}/season/{number}/images"),
             &["language", "include_image_language"],
         ),
+        ["tmdb", "tv", id, "episode_groups"] if positive(id) => {
+            (format!("tv/{id}/episode_groups"), &[])
+        }
+        ["tmdb", "tv", "episode_group", id] if hex_group_id(id) => {
+            (format!("tv/episode_group/{id}"), &["language"])
+        }
         ["tmdb", "find"] => {
             let source = args
                 .remove("source")

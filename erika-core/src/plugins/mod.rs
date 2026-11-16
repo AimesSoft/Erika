@@ -11,16 +11,16 @@
 
 mod catalog;
 mod deadline;
-mod http;
 mod hooks;
+mod http;
 mod links;
 mod overlays;
 mod pack;
 mod runtime;
 mod sources;
+pub(crate) mod store;
 #[cfg(feature = "bern-module-anime")]
 mod watched;
-pub(crate) mod store;
 
 use crate::{ErikaEngine, in_background, markdown};
 use bern::CommandError;
@@ -63,7 +63,10 @@ impl Saved {
             text: serde_json::from_value(read("text")).unwrap_or_default(),
             switches: serde_json::from_value(read("switches")).unwrap_or_default(),
             storage: serde_json::from_value(read("storage")).unwrap_or_default(),
-            downloader: value.get("downloader").and_then(Value::as_bool).unwrap_or(false),
+            downloader: value
+                .get("downloader")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         }
     }
 
@@ -100,6 +103,7 @@ pub(crate) struct Extensions {
     pub colors: Vec<(String, String)>,
     pub hex_input: bool,
     pub watched_button: bool,
+    pub hover_glow: bool,
     pub quick_select: bool,
     /// How many seconds of each video's opening to measure, 0 when no
     /// plugin asked.
@@ -132,9 +136,15 @@ enum Done {
     Opening(u64, Result<Value, String>),
     /// A request of a link's resolution answered.
     Resolved(u64, Result<Value, String>),
-    SourceMetadata(sources::metadata::Work, erika_catalog::resolve::FileResolution),
+    SourceMetadata(
+        sources::metadata::Work,
+        erika_catalog::resolve::FileResolution,
+    ),
     #[cfg(feature = "bern-module-anime")]
-    EpisodeWatched(u64, erika_dandanplay::Result<erika_dandanplay::catalog::Details>),
+    EpisodeWatched(
+        u64,
+        erika_dandanplay::Result<erika_dandanplay::catalog::Details>,
+    ),
     /// A plugin's parsed README, with public market pictures localized.
     Readme(String, Result<Vec<DocBlock>, String>),
 }
@@ -149,8 +159,13 @@ fn completion<T: Send + 'static>(
     let wake = bern::wake::waker();
     move |answer| {
         if let Some(inbox) = inbox.upgrade() {
-            inbox.lock().unwrap_or_else(|p| p.into_inner()).push(wrap(answer));
-            if let Some(wake) = wake { wake.wake(); }
+            inbox
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(wrap(answer));
+            if let Some(wake) = wake {
+                wake.wake();
+            }
         }
     }
 }
@@ -192,6 +207,7 @@ pub(crate) struct Plugins {
     waiting_tracks: Vec<String>,
     /// Whether the anime module shows the episodes' mark buttons.
     watched_button: bool,
+    hover_glow: bool,
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     processes: HashMap<String, std::process::Child>,
 }
@@ -224,6 +240,7 @@ impl Default for Plugins {
             chain: None,
             waiting_tracks: Vec::new(),
             watched_button: false,
+            hover_glow: false,
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             processes: HashMap::new(),
         }
@@ -236,7 +253,9 @@ impl Plugins {
     }
 
     fn find_mut(&mut self, id: &str) -> Option<&mut Installed> {
-        self.installed.iter_mut().find(|plugin| plugin.pack.id == id)
+        self.installed
+            .iter_mut()
+            .find(|plugin| plugin.pack.id == id)
     }
 
     /// The plugins whose contexts run.
@@ -244,7 +263,15 @@ impl Plugins {
         self.runtimes.keys().cloned().collect()
     }
 
-    fn invoke(&mut self, id: &str, name: &str, arg: Option<&Value>, snapshot: &Value, tag: u64, purpose: Purpose) {
+    fn invoke(
+        &mut self,
+        id: &str,
+        name: &str,
+        arg: Option<&Value>,
+        snapshot: &Value,
+        tag: u64,
+        purpose: Purpose,
+    ) {
         if let Some(runtime) = self.runtimes.get_mut(id) {
             if tag != 0 {
                 self.later.insert(tag, purpose.clone());
@@ -280,6 +307,7 @@ impl Plugins {
             }
             all.hex_input |= extension.hex_input;
             all.watched_button |= extension.watched_button;
+            all.hover_glow |= extension.hover_glow;
             all.quick_select |= extension.quick_select;
             all.opening = all.opening.max(extension.opening);
             all.strip = all.strip.or(extension.strip.clone());
@@ -311,7 +339,10 @@ enum Readme {
 
 impl Readme {
     fn of(installed: Option<&Installed>, listing: Option<&store::Listing>) -> Option<Readme> {
-        if let Some(path) = installed.map(|plugin| plugin.dir.join("README.md")).filter(|path| path.is_file()) {
+        if let Some(path) = installed
+            .map(|plugin| plugin.dir.join("README.md"))
+            .filter(|path| path.is_file())
+        {
             return Some(Readme::File(path));
         }
         Some(match &listing?.files {
@@ -326,7 +357,10 @@ impl Readme {
         let (bytes, base) = match self {
             Readme::File(path) => {
                 let base = MediaSource::file(path.clone()).url;
-                (std::fs::read(&path).map_err(|error| error.to_string())?, base)
+                (
+                    std::fs::read(&path).map_err(|error| error.to_string())?,
+                    base,
+                )
             }
             Readme::Address(address) => (store::readme(&address)?, address),
             Readme::Package(package) => (store::package_file(package, "README.md")?, String::new()),
@@ -343,10 +377,7 @@ impl Readme {
     }
 }
 
-fn cache_readme_images(
-    blocks: &mut [DocBlock],
-    mut cache: impl FnMut(&str) -> Option<String>,
-) {
+fn cache_readme_images(blocks: &mut [DocBlock], mut cache: impl FnMut(&str) -> Option<String>) {
     for block in blocks {
         if let Some(image) = &mut block.image {
             if let Some(local) = cache(&image.url) {
@@ -363,16 +394,26 @@ mod market_readme_tests {
     #[test]
     fn readme_pictures_are_cached_after_resolving_the_original_base() {
         let base = "https://raw.githubusercontent.com/AimesSoft/erika_plugins/main/tools/README.md";
-        let mut blocks = markdown::blocks("# Tools\n\n![icon](icon.png)\n\n![other](https://example.com/a.png)", base);
-        let original = "https://raw.githubusercontent.com/AimesSoft/erika_plugins/main/tools/icon.png";
+        let mut blocks = markdown::blocks(
+            "# Tools\n\n![icon](icon.png)\n\n![other](https://example.com/a.png)",
+            base,
+        );
+        let original =
+            "https://raw.githubusercontent.com/AimesSoft/erika_plugins/main/tools/icon.png";
         let mut seen = Vec::new();
         cache_readme_images(&mut blocks, |url| {
             seen.push(url.to_string());
             (url == original).then(|| "file:///cache/icon.png".to_string())
         });
         assert!(seen.iter().any(|url| url == original));
-        let images: Vec<_> = blocks.iter().filter_map(|block| block.image.as_ref().map(|image| image.url.as_str())).collect();
-        assert_eq!(images, vec!["file:///cache/icon.png", "https://example.com/a.png"]);
+        let images: Vec<_> = blocks
+            .iter()
+            .filter_map(|block| block.image.as_ref().map(|image| image.url.as_str()))
+            .collect();
+        assert_eq!(
+            images,
+            vec!["file:///cache/icon.png", "https://example.com/a.png"]
+        );
     }
 }
 
@@ -488,14 +529,22 @@ impl ErikaEngine {
                 Done::Opening(revision, Ok(frames)) => {
                     if self.state.video && self.match_revision == revision {
                         let url = self.current_source().map(|source| source.url.clone());
-                        self.plugin_event("openingProfiled", json!({ "url": url, "frames": frames }));
+                        self.plugin_event(
+                            "openingProfiled",
+                            json!({ "url": url, "frames": frames }),
+                        );
                     }
                 }
                 #[cfg(liberika_kernel)]
                 Done::Opening(_, Err(_)) => eprintln!("erika: opening profile unavailable"),
                 Done::Resolved(tag, answer) => self.resolver_fetched(tag, answer),
                 Done::ResolveTimeout(tag) => {
-                    if self.plugins.resolution.as_ref().is_some_and(|r| r.tag == tag) {
+                    if self
+                        .plugins
+                        .resolution
+                        .as_ref()
+                        .is_some_and(|r| r.tag == tag)
+                    {
                         self.check_resolution();
                     }
                 }
@@ -604,8 +653,14 @@ impl ErikaEngine {
             rate: self.plugin_rate(),
         };
         snapshot.insert("player".into(), json!(state));
-        snapshot.insert("danmaku.offset".into(), json!(self.state.danmaku_settings.delay));
-        snapshot.insert("text".into(), json!(saved.text.get(id).cloned().unwrap_or_default()));
+        snapshot.insert(
+            "danmaku.offset".into(),
+            json!(self.state.danmaku_settings.delay),
+        );
+        snapshot.insert(
+            "text".into(),
+            json!(saved.text.get(id).cloned().unwrap_or_default()),
+        );
         snapshot.insert(
             "switch".into(),
             json!(saved.switches.get(id).cloned().unwrap_or_default()),
@@ -617,10 +672,15 @@ impl ErikaEngine {
         snapshot.insert("process.running".into(), json!(self.process_running(id)));
         if pack.is_some_and(|pack| pack.has("library.read")) {
             snapshot.insert("library".into(), self.library_for_plugins());
-            snapshot.insert("library.mediaContext".into(), match self.plugin_media_context() {
-                Ok(context) => json!({"ok":true,"value":context}),
-                Err(error) => json!({"ok":false,"error":{"code":error.code,"message":error.message}}),
-            });
+            snapshot.insert(
+                "library.mediaContext".into(),
+                match self.plugin_media_context() {
+                    Ok(context) => json!({"ok":true,"value":context}),
+                    Err(error) => {
+                        json!({"ok":false,"error":{"code":error.code,"message":error.message}})
+                    }
+                },
+            );
         }
         Value::Object(snapshot)
     }
@@ -635,7 +695,10 @@ impl ErikaEngine {
     fn library_for_plugins(&self) -> Value {
         let mut shows = self.canonical_shows_for_plugins().unwrap_or_default();
         for entry in self.db.entries(None) {
-            if entry.file.is_some_and(|file| self.db.catalog_binding(file).is_ok_and(|b| b.is_some())) {
+            if entry
+                .file
+                .is_some_and(|file| self.db.catalog_binding(file).is_ok_and(|b| b.is_some()))
+            {
                 continue;
             }
             let Some((anime, _)) = entry.matched else {
@@ -754,11 +817,17 @@ impl ErikaEngine {
             let Some(name) = call.get(0).and_then(Value::as_str) else {
                 continue;
             };
-            let args = call.get(1).and_then(Value::as_array).cloned().unwrap_or_default();
+            let args = call
+                .get(1)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             self.apply_plugin_call(id, name, &args);
         }
-        if matches!(purpose, Purpose::Danmaku(_) | Purpose::Resolve(_) | Purpose::Suggest(_))
-            && reply.get("pending").and_then(Value::as_bool) != Some(true)
+        if matches!(
+            purpose,
+            Purpose::Danmaku(_) | Purpose::Resolve(_) | Purpose::Suggest(_)
+        ) && reply.get("pending").and_then(Value::as_bool) != Some(true)
         {
             self.plugin_hook_answered(id, purpose, reply.get("value").cloned(), error);
         }
@@ -774,9 +843,16 @@ impl ErikaEngine {
         if !value.is_object() {
             return;
         }
-        let name = self.plugins.find(id).map(|p| p.pack.name.clone()).unwrap_or_default();
+        let name = self
+            .plugins
+            .find(id)
+            .map(|p| p.pack.name.clone())
+            .unwrap_or_default();
         let title = text_of(&value, "title");
-        self.show_plugin_message(if title.is_empty() { name } else { title }, text_of(&value, "content"));
+        self.show_plugin_message(
+            if title.is_empty() { name } else { title },
+            text_of(&value, "content"),
+        );
     }
 
     fn show_plugin_message(&mut self, title: String, message: String) {
@@ -801,13 +877,16 @@ impl ErikaEngine {
             }
             return;
         }
-        let text = |index: usize| args.get(index).map_or(String::new(), |value| match value {
-            Value::String(text) => text.clone(),
-            other => other.to_string(),
-        });
+        let text = |index: usize| {
+            args.get(index).map_or(String::new(), |value| match value {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            })
+        };
         let flag = |index: usize| {
-            args.get(index)
-                .is_some_and(|value| value.as_bool() == Some(true) || value.as_str() == Some("true"))
+            args.get(index).is_some_and(|value| {
+                value.as_bool() == Some(true) || value.as_str() == Some("true")
+            })
         };
         let saved = &mut self.plugins.saved;
         match name {
@@ -817,7 +896,11 @@ impl ErikaEngine {
             }),
             "uiShowDialog" if pack.has("ui.dialog") => self.show_plugin_message(text(0), text(1)),
             "storageSet" if pack.has("storage") => {
-                saved.storage.entry(id.into()).or_default().insert(text(0), text(1));
+                saved
+                    .storage
+                    .entry(id.into())
+                    .or_default()
+                    .insert(text(0), text(1));
                 saved.save(&self.db);
             }
             "storageRemove" if pack.has("storage") => {
@@ -829,12 +912,20 @@ impl ErikaEngine {
                 saved.save(&self.db);
             }
             "pluginSetTextSetting" => {
-                saved.text.entry(id.into()).or_default().insert(text(0), text(1));
+                saved
+                    .text
+                    .entry(id.into())
+                    .or_default()
+                    .insert(text(0), text(1));
                 saved.save(&self.db);
                 self.show_plugins();
             }
             "pluginSetSwitchSetting" => {
-                saved.switches.entry(id.into()).or_default().insert(text(0), flag(1));
+                saved
+                    .switches
+                    .entry(id.into())
+                    .or_default()
+                    .insert(text(0), flag(1));
                 saved.save(&self.db);
                 self.show_plugins();
             }
@@ -851,11 +942,14 @@ impl ErikaEngine {
             #[cfg(feature = "bern-module-anime")]
             "librarySetEpisodeWatched" if pack.has("library.write") => {
                 if let (Some(anime), Some(episode)) = (
-                    args.first().and_then(Value::as_i64), args.get(1).and_then(Value::as_i64),
+                    args.first().and_then(Value::as_i64),
+                    args.get(1).and_then(Value::as_i64),
                 ) {
                     self.plugin_mark_watched(id, anime, episode, flag(2));
                 } else {
-                    self.notify(Notice::OperationFailed { reason: "弹弹play作品或集号不正确".into() });
+                    self.notify(Notice::OperationFailed {
+                        reason: "弹弹play作品或集号不正确".into(),
+                    });
                 }
             }
             "extendSpeeds" if pack.has("player.control") => {
@@ -892,23 +986,50 @@ impl ErikaEngine {
                 self.apply_extensions();
             }
             "extendDanmakuHexInput" if pack.has("danmaku.modify") => {
-                self.plugins.extensions.entry(id.into()).or_default().hex_input = flag(0);
+                self.plugins
+                    .extensions
+                    .entry(id.into())
+                    .or_default()
+                    .hex_input = flag(0);
                 self.apply_extensions();
             }
             "extendOpeningProfile" if pack.has("player.control") => {
-                let seconds = args.get(1).and_then(Value::as_f64).unwrap_or(OPENING_SECONDS);
-                self.plugins.extensions.entry(id.into()).or_default().opening = if flag(0) {
+                let seconds = args
+                    .get(1)
+                    .and_then(Value::as_f64)
+                    .unwrap_or(OPENING_SECONDS);
+                self.plugins
+                    .extensions
+                    .entry(id.into())
+                    .or_default()
+                    .opening = if flag(0) {
                     seconds.clamp(1.0, 60.0)
                 } else {
                     0.0
                 };
             }
             "extendDownloadQuickSelect" if pack.has("library.read") => {
-                self.plugins.extensions.entry(id.into()).or_default().quick_select = flag(0);
+                self.plugins
+                    .extensions
+                    .entry(id.into())
+                    .or_default()
+                    .quick_select = flag(0);
                 self.apply_extensions();
             }
             "extendWatchedButton" if pack.has("library.write") => {
-                self.plugins.extensions.entry(id.into()).or_default().watched_button = flag(0);
+                self.plugins
+                    .extensions
+                    .entry(id.into())
+                    .or_default()
+                    .watched_button = flag(0);
+                self.apply_extensions();
+            }
+            "extendHoverGlow" => {
+                self.plugins
+                    .extensions
+                    .entry(id.into())
+                    .or_default()
+                    .hover_glow = flag(0);
                 self.apply_extensions();
             }
             "extendProgressStrip" if pack.has("player.overlay") => {
@@ -917,8 +1038,11 @@ impl ErikaEngine {
                 self.apply_extensions();
             }
             "extendDanmakuDensity" if pack.has("player.overlay") => {
-                self.plugins.extensions.entry(id.into()).or_default().density =
-                    overlays::shown_in(args.first());
+                self.plugins
+                    .extensions
+                    .entry(id.into())
+                    .or_default()
+                    .density = overlays::shown_in(args.first());
                 self.apply_extensions();
             }
             "__later" => self.plugin_later(id, args),
@@ -935,7 +1059,8 @@ impl ErikaEngine {
                 let _ = erika::Commands::toggle_pause(self);
             }
             Call::Seek(seconds) if self.state.duration > 0.0 => {
-                let _ = erika::Commands::seek(self, (seconds / self.state.duration).clamp(0.0, 1.0));
+                let _ =
+                    erika::Commands::seek(self, (seconds / self.state.duration).clamp(0.0, 1.0));
             }
             Call::SetRate(rate) => self.set_rate_override(Some(rate)),
             Call::ShowDanmaku => {
@@ -1001,7 +1126,12 @@ impl ErikaEngine {
         for id in self.plugins.saved.enabled.clone() {
             if self.plugins.find(&id).is_some() {
                 self.start_runtime(&id);
-            } else if self.plugins.listings.iter().any(|listing| listing.pack.id == id) {
+            } else if self
+                .plugins
+                .listings
+                .iter()
+                .any(|listing| listing.pack.id == id)
+            {
                 let _ = self.install_plugin_command(id);
             }
         }
@@ -1045,7 +1175,8 @@ impl ErikaEngine {
         self.state.downloader_unlocked = unlocked;
         self.state.downloads_hidden = crate::settings::downloader_hidden();
         if was_hidden != self.state.downloads_hidden && cfg!(feature = "bern-module-downloads") {
-            let _ = erika::Commands::set_module(self, "downloads".into(), !self.state.downloads_hidden);
+            let _ =
+                erika::Commands::set_module(self, "downloads".into(), !self.state.downloads_hidden);
         }
     }
 
@@ -1063,8 +1194,8 @@ impl ErikaEngine {
         let revision = self.match_revision;
         #[cfg(liberika_kernel)]
         in_background(&self.plugins.inbox, move || {
-            let profile = liberika::opening::opening_profile(&url, seconds, 4.0)
-                .map(|frames| json!(frames));
+            let profile =
+                liberika::opening::opening_profile(&url, seconds, 4.0).map(|frames| json!(frames));
             vec![Done::Opening(revision, profile)]
         });
         #[cfg(not(liberika_kernel))]
@@ -1089,7 +1220,10 @@ impl ErikaEngine {
             // Reuse the permission-filtered snapshot: the event and getMediaContext
             // must not observe different catalogue commits or leak it without read access.
             let mut data = data.clone();
-            if matches!(name, "videoLoaded" | "play" | "pause" | "seek" | "mediaChanged") {
+            if matches!(
+                name,
+                "videoLoaded" | "play" | "pause" | "seek" | "mediaChanged"
+            ) {
                 catalog::attach_context(&mut data, &snapshot);
             }
             let event = json!({ "name": name, "data": data });
@@ -1101,35 +1235,75 @@ impl ErikaEngine {
 
     /// The plugins asked for something that answers later, by `net.fetch`.
     fn plugin_fetch(&mut self, id: &str, args: &[Value]) {
-        let Some(request) = args.first().and_then(Value::as_u64) else { return; };
-        let Some(runtime) = self.plugins.runtimes.get(id) else { return; };
-        if runtime.fetches.contains_key(&request) { return; }
+        let Some(request) = args.first().and_then(Value::as_u64) else {
+            return;
+        };
+        let Some(runtime) = self.plugins.runtimes.get(id) else {
+            return;
+        };
+        if runtime.fetches.contains_key(&request) {
+            return;
+        }
         let instance = runtime.instance;
         if runtime.fetches.len() >= 16 {
             let snapshot = self.plugin_snapshot(id);
             self.plugins.runtimes.get_mut(id).unwrap().settle(
-                request, Err("插件同时请求过多".into()), &snapshot,
+                request,
+                Err("插件同时请求过多".into()),
+                &snapshot,
             );
             return;
         }
         let url = args.get(1).and_then(Value::as_str).unwrap_or_default();
         let options = args.get(2).unwrap_or(&Value::Null);
         let owner = id.to_string();
-        let pending = http::start(http::Request::fetch(url, options),
-            completion(&self.plugins.inbox, move |answer| Done::Fetched(owner, instance, request, answer)));
-        self.plugins.runtimes.get_mut(id).unwrap().fetches.insert(request, pending);
+        let pending = http::start(
+            http::Request::fetch(url, options),
+            completion(&self.plugins.inbox, move |answer| {
+                Done::Fetched(owner, instance, request, answer)
+            }),
+        );
+        self.plugins
+            .runtimes
+            .get_mut(id)
+            .unwrap()
+            .fetches
+            .insert(request, pending);
     }
 
-    fn plugin_fetched(&mut self, id: &str, instance: u64, request: u64, answer: Result<Value, String>) {
-        let allowed = self.state.features.plugins && self.plugins.enabled(id)
+    fn plugin_fetched(
+        &mut self,
+        id: &str,
+        instance: u64,
+        request: u64,
+        answer: Result<Value, String>,
+    ) {
+        let allowed = self.state.features.plugins
+            && self.plugins.enabled(id)
             && self.plugins.find(id).is_some_and(|p| p.pack.has("network"));
-        let Some(runtime) = self.plugins.runtimes.get_mut(id).filter(|r| r.instance == instance)
-            else { return; };
-        if runtime.fetches.remove(&request).is_none() { return; }
+        let Some(runtime) = self
+            .plugins
+            .runtimes
+            .get_mut(id)
+            .filter(|r| r.instance == instance)
+        else {
+            return;
+        };
+        if runtime.fetches.remove(&request).is_none() {
+            return;
+        }
         // A load handler may await net.fetch before `loaded` becomes true.
-        let answer = if allowed { answer } else { Err("插件网络权限已撤销".into()) };
+        let answer = if allowed {
+            answer
+        } else {
+            Err("插件网络权限已撤销".into())
+        };
         let snapshot = self.plugin_snapshot(id);
-        self.plugins.runtimes.get_mut(id).unwrap().settle(request, answer, &snapshot);
+        self.plugins
+            .runtimes
+            .get_mut(id)
+            .unwrap()
+            .settle(request, answer, &snapshot);
     }
 
     /// A handler's promise settled: an action's text, or a hook's result.
@@ -1153,7 +1327,11 @@ impl ErikaEngine {
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     fn start_process(&mut self, id: &str, args: &[Value]) {
         self.stop_process(id);
-        let Some(program) = args.first().and_then(Value::as_str).filter(|p| !p.trim().is_empty()) else {
+        let Some(program) = args
+            .first()
+            .and_then(Value::as_str)
+            .filter(|p| !p.trim().is_empty())
+        else {
             return;
         };
         let mut command = std::process::Command::new(program);
@@ -1202,7 +1380,9 @@ impl ErikaEngine {
         let name = pack.name.clone();
         let was_enabled = self.plugins.enabled(&id);
         self.stop_runtime(&id);
-        let dir = store::folder().map(|folder| folder.join(&id)).unwrap_or_default();
+        let dir = store::folder()
+            .map(|folder| folder.join(&id))
+            .unwrap_or_default();
         self.plugins.installed.retain(|plugin| plugin.pack.id != id);
         self.plugins.installed.push(Installed {
             pack,
@@ -1212,9 +1392,12 @@ impl ErikaEngine {
             loaded: false,
             error: String::new(),
         });
-        self.plugins
-            .installed
-            .sort_by(|a, b| a.pack.priority.cmp(&b.pack.priority).then(a.pack.id.cmp(&b.pack.id)));
+        self.plugins.installed.sort_by(|a, b| {
+            a.pack
+                .priority
+                .cmp(&b.pack.priority)
+                .then(a.pack.id.cmp(&b.pack.id))
+        });
         // A new plugin is turned on; an update keeps the switch it had.
         if !was_enabled && !self.plugins.saved.enabled.contains(&id) {
             self.plugins.saved.enabled.push(id.clone());
@@ -1231,7 +1414,11 @@ impl ErikaEngine {
         let host = self.state.version.clone();
         let mut all: Vec<Plugin> = Vec::new();
         for plugin in &self.plugins.installed {
-            let listed = self.plugins.listings.iter().find(|l| l.pack.id == plugin.pack.id);
+            let listed = self
+                .plugins
+                .listings
+                .iter()
+                .find(|l| l.pack.id == plugin.pack.id);
             all.push(self.plugin_row(&plugin.pack, Some(plugin), listed, &host));
         }
         for listing in &self.plugins.listings {
@@ -1274,7 +1461,8 @@ impl ErikaEngine {
             }
             _ => listing.and_then(|l| l.image.clone()).map(MediaSource::new),
         };
-        let mut unsupported: Vec<String> = pack.unsupported().iter().map(|s| s.to_string()).collect();
+        let mut unsupported: Vec<String> =
+            pack.unsupported().iter().map(|s| s.to_string()).collect();
         if !pack.fits(host) {
             unsupported.push(format!(
                 "需要 Erika {} 或更新版本",
@@ -1305,7 +1493,9 @@ impl ErikaEngine {
                 && listing.is_some_and(|listing| pack::newer(&listing.pack.version, &pack.version)),
             busy: self.plugins.busy.contains(&pack.id),
             unsupported: unsupported.join("；"),
-            error: installed.map(|plugin| plugin.error.clone()).unwrap_or_default(),
+            error: installed
+                .map(|plugin| plugin.error.clone())
+                .unwrap_or_default(),
             // What goes in the danmaku menu is not on the plugin's page.
             has_settings: installed
                 .is_some_and(|plugin| plugin.entries.iter().any(|entry| !overlays::in_menu(entry))),
@@ -1347,7 +1537,12 @@ impl ErikaEngine {
                     let text = saved_text
                         .and_then(|values| values.get(&entry_id).cloned())
                         .unwrap_or_else(|| text_of(setting, "default"));
-                    (PluginEntryKind::Text, false, text, text_of(setting, "hintText"))
+                    (
+                        PluginEntryKind::Text,
+                        false,
+                        text,
+                        text_of(setting, "hintText"),
+                    )
                 } else {
                     (PluginEntryKind::Action, false, String::new(), String::new())
                 };
@@ -1418,10 +1613,20 @@ impl ErikaEngine {
         Ok(())
     }
 
-    pub(crate) fn import_plugin_command(&mut self, source: MediaSource) -> Result<(), CommandError> {
-        let path = bern::files::file_path(&source.url)
-            .ok_or_else(|| CommandError::new("invalid_plugin", "请选择本地的插件包、插件文件夹或 .js 文件"))?;
-        let id = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    pub(crate) fn import_plugin_command(
+        &mut self,
+        source: MediaSource,
+    ) -> Result<(), CommandError> {
+        let path = bern::files::file_path(&source.url).ok_or_else(|| {
+            CommandError::new(
+                "invalid_plugin",
+                "请选择本地的插件包、插件文件夹或 .js 文件",
+            )
+        })?;
+        let id = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         self.plugins.busy.push(id.clone());
         let inbox = Arc::clone(&self.plugins.inbox);
         in_background(&inbox, move || {
@@ -1447,7 +1652,11 @@ impl ErikaEngine {
     pub(crate) fn open_plugin_info_command(&mut self, id: String) -> Result<(), CommandError> {
         let host = self.state.version.clone();
         let installed = self.plugins.find(&id);
-        let listing = self.plugins.listings.iter().find(|listing| listing.pack.id == id);
+        let listing = self
+            .plugins
+            .listings
+            .iter()
+            .find(|listing| listing.pack.id == id);
         let pack = installed
             .map(|plugin| &plugin.pack)
             .or(listing.map(|listing| &listing.pack))
@@ -1458,11 +1667,17 @@ impl ErikaEngine {
             open: true,
             loading: readme.is_some(),
             error: String::new(),
-            blocks: if readme.is_some() { Vec::new() } else { markdown::paragraph(&plugin.description) },
+            blocks: if readme.is_some() {
+                Vec::new()
+            } else {
+                markdown::paragraph(&plugin.description)
+            },
             plugin: Some(plugin),
         };
         if let Some(readme) = readme {
-            in_background(&self.plugins.inbox, move || vec![Done::Readme(id, readme.blocks())]);
+            in_background(&self.plugins.inbox, move || {
+                vec![Done::Readme(id, readme.blocks())]
+            });
         }
         Ok(())
     }
@@ -1476,20 +1691,31 @@ impl ErikaEngine {
     /// one, what the market says of the plugin.
     fn readme_read(&mut self, id: &str, readme: Result<Vec<DocBlock>, String>) {
         let info = &mut self.state.plugin_info;
-        let Some(plugin) = info.plugin.as_ref().filter(|plugin| info.open && plugin.id == id) else {
+        let Some(plugin) = info
+            .plugin
+            .as_ref()
+            .filter(|plugin| info.open && plugin.id == id)
+        else {
             return;
         };
         let blocks = match readme {
             Ok(blocks) => blocks,
             Err(_) => Vec::new(),
         };
-        info.blocks = if blocks.is_empty() { markdown::paragraph(&plugin.description) } else { blocks };
+        info.blocks = if blocks.is_empty() {
+            markdown::paragraph(&plugin.description)
+        } else {
+            blocks
+        };
         info.loading = false;
     }
 
     pub(crate) fn uninstall_plugin_command(&mut self, id: String) -> Result<(), CommandError> {
         if self.plugins.find(&id).is_none() {
-            return Err(CommandError::new("unknown_plugin", format!("没有安装插件 {id}")));
+            return Err(CommandError::new(
+                "unknown_plugin",
+                format!("没有安装插件 {id}"),
+            ));
         }
         self.stop_runtime(&id);
         store::remove(&id);
@@ -1508,9 +1734,16 @@ impl ErikaEngine {
         Ok(())
     }
 
-    pub(crate) fn set_plugin_enabled_command(&mut self, id: String, enabled: bool) -> Result<(), CommandError> {
+    pub(crate) fn set_plugin_enabled_command(
+        &mut self,
+        id: String,
+        enabled: bool,
+    ) -> Result<(), CommandError> {
         if self.plugins.find(&id).is_none() {
-            return Err(CommandError::new("unknown_plugin", format!("没有安装插件 {id}")));
+            return Err(CommandError::new(
+                "unknown_plugin",
+                format!("没有安装插件 {id}"),
+            ));
         }
         self.plugins.saved.enabled.retain(|on| on != &id);
         if enabled {
@@ -1542,7 +1775,10 @@ impl ErikaEngine {
 
     pub(crate) fn open_plugin_command(&mut self, id: String) -> Result<(), CommandError> {
         if self.plugins.find(&id).is_none() {
-            return Err(CommandError::new("unknown_plugin", format!("没有安装插件 {id}")));
+            return Err(CommandError::new(
+                "unknown_plugin",
+                format!("没有安装插件 {id}"),
+            ));
         }
         self.plugins.open = Some(id);
         self.state.plugin_panel.has_message = false;
@@ -1563,7 +1799,11 @@ impl ErikaEngine {
         Ok(())
     }
 
-    pub(crate) fn set_plugin_switch_command(&mut self, entry: String, value: bool) -> Result<(), CommandError> {
+    pub(crate) fn set_plugin_switch_command(
+        &mut self,
+        entry: String,
+        value: bool,
+    ) -> Result<(), CommandError> {
         let id = self.open_plugin_id()?;
         self.plugins
             .saved
@@ -1578,7 +1818,11 @@ impl ErikaEngine {
         Ok(())
     }
 
-    pub(crate) fn set_plugin_text_command(&mut self, entry: String, value: String) -> Result<(), CommandError> {
+    pub(crate) fn set_plugin_text_command(
+        &mut self,
+        entry: String,
+        value: String,
+    ) -> Result<(), CommandError> {
         let id = self.open_plugin_id()?;
         self.plugins
             .saved
@@ -1619,11 +1863,15 @@ fn fetch_requires(pack: &Pack) -> Result<(), String> {
     if pack.requires.is_empty() || !pack.has("script.external") {
         return Ok(());
     }
-    let folder = store::folder().ok_or("没有可以安装插件的地方")?.join(&pack.id).join("requires");
+    let folder = store::folder()
+        .ok_or("没有可以安装插件的地方")?
+        .join(&pack.id)
+        .join("requires");
     std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
     for (index, external) in pack.requires.iter().enumerate() {
         let script = store::get(&external.url)?;
-        std::fs::write(folder.join(format!("{index}.js")), script).map_err(|error| error.to_string())?;
+        std::fs::write(folder.join(format!("{index}.js")), script)
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -1684,7 +1932,8 @@ mod tests {
 
     #[test]
     fn load_js_names_scripts() {
-        let arguments = ["erika", "--load-js", "/a.js", "--other", "--load-js=/b.js"].map(String::from);
+        let arguments =
+            ["erika", "--load-js", "/a.js", "--other", "--load-js=/b.js"].map(String::from);
         assert_eq!(
             load_js_arguments(arguments.into_iter()),
             vec![PathBuf::from("/a.js"), PathBuf::from("/b.js")]
@@ -1695,9 +1944,21 @@ mod tests {
     fn saved_state_round_trips() {
         let mut saved = Saved::default();
         saved.enabled.push("a".into());
-        saved.text.entry("a".into()).or_default().insert("key".into(), "值".into());
-        saved.switches.entry("a".into()).or_default().insert("on".into(), true);
-        saved.storage.entry("a".into()).or_default().insert("k".into(), "\"v\"".into());
+        saved
+            .text
+            .entry("a".into())
+            .or_default()
+            .insert("key".into(), "值".into());
+        saved
+            .switches
+            .entry("a".into())
+            .or_default()
+            .insert("on".into(), true);
+        saved
+            .storage
+            .entry("a".into())
+            .or_default()
+            .insert("k".into(), "\"v\"".into());
         saved.downloader = true;
         assert_eq!(Saved::from_value(&saved.to_value()), saved);
         assert_eq!(Saved::from_value(&Value::Null), Saved::default());

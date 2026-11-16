@@ -248,12 +248,7 @@ fn source_content_unbinding_restores_the_logical_source_note() {
     use erika_catalog::{BindingItem, Decision, FileBinding, Kind, tmdb};
     for external_edit in [false, true] {
         let (mut e, _, item) = fixture();
-        let work = tmdb::parse_work(
-            Kind::Movie,
-            71,
-            &json!({"id":71,"title":"规范电影"}),
-        )
-        .unwrap();
+        let work = tmdb::parse_work(Kind::Movie, 71, &json!({"id":71,"title":"规范电影"})).unwrap();
         e.db.catalog_apply(
             &[work.node.clone()],
             &[],

@@ -48,12 +48,28 @@ pub struct Episode {
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct Title {
+    #[serde(default, deserialize_with = "super::text_or_null")]
+    pub language: String,
+    #[serde(default, deserialize_with = "super::text_or_null")]
+    pub title: String,
+}
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct Details {
     pub anime_id: u64,
     #[serde(default, deserialize_with = "super::text_or_null")]
     pub bangumi_id: String,
     #[serde(default, deserialize_with = "super::text_or_null")]
     pub anime_title: String,
+    #[serde(default, deserialize_with = "super::text_or_null")]
+    pub summary: String,
+    /// `tvseries`, `web`, `movie`, `ova` and the like.
+    #[serde(default, rename = "type", deserialize_with = "super::text_or_null")]
+    pub media_type: String,
+    /// Main title, romanised and alias names, as the service lists them.
+    #[serde(default, deserialize_with = "nullable_vec")]
+    pub titles: Vec<Title>,
     #[serde(default, deserialize_with = "super::text_or_null")]
     pub bangumi_url: String,
     #[serde(default, deserialize_with = "nullable_vec")]
@@ -186,8 +202,13 @@ pub fn evidence(matched: &Matched, details: Option<&Details>) -> Result<Recognit
         shift_seconds: matched.shift,
         ..Default::default()
     };
-    for title in
-        std::iter::once(matched.anime_title.as_str()).chain(details.map(|d| d.anime_title.as_str()))
+    for title in std::iter::once(matched.anime_title.as_str())
+        .chain(details.map(|d| d.anime_title.as_str()))
+        .chain(
+            details
+                .into_iter()
+                .flat_map(|d| d.titles.iter().map(|t| t.title.as_str())),
+        )
     {
         if !title.trim().is_empty() && !result.titles.iter().any(|t| t == title.trim()) {
             result.titles.push(title.trim().to_owned());
@@ -196,6 +217,26 @@ pub fn evidence(matched: &Matched, details: Option<&Details>) -> Result<Recognit
     if let Some(details) = details {
         result.tmdb = details.tmdb_refs();
         result.bangumi_subject = details.bangumi_ref();
+        result.kind = match details.media_type.as_str() {
+            "movie" | "jpmovie" => Some(Kind::Movie),
+            "tvseries" | "web" | "tvspecial" | "jpdrama" => Some(Kind::Tv),
+            _ => None,
+        };
+        if let Some((year, date)) = erika_catalog::resolve::earliest_premiere(
+            details
+                .seasons
+                .iter()
+                .filter_map(|s| s.air_date.as_deref())
+                .chain(
+                    details
+                        .episodes
+                        .iter()
+                        .filter_map(|e| e.air_date.as_deref()),
+                ),
+        ) {
+            result.year = Some(year);
+            result.premiere_date = Some(date);
+        }
         let episodes: Vec<_> = details
             .episodes
             .iter()
@@ -423,7 +464,141 @@ pub async fn recognize(file_name: &str, md5: &str, size: u64) -> Result<Option<R
     }
     let matched = &reply.matches[0];
     let details = details(&matched.anime_id.to_string(), false).await.ok();
-    evidence(matched, details.as_ref()).map(Some)
+    let mut result = evidence(matched, details.as_ref())?;
+    if result.tmdb.is_empty()
+        && let Some(subject) = result
+            .bangumi_subject
+            .as_ref()
+            .and_then(|r| r.id.parse::<i64>().ok())
+        && let Ok(bgm) = super::bangumi::subject(subject).await
+    {
+        let insert_at = result.titles.len().min(1);
+        for name in bgm.titles {
+            if !result.titles.contains(&name) {
+                result.titles.insert(insert_at, name);
+            }
+        }
+        if result.premiere_date.is_none()
+            && let Some((year, date)) =
+                erika_catalog::resolve::earliest_premiere([bgm.date.as_str()])
+        {
+            result.year = Some(year);
+            result.premiere_date = Some(date);
+        }
+    }
+    Ok(Some(result))
+}
+
+/// Automatic TMDB → dandanplay → Bangumi read-only bridge result.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bridge {
+    pub bangumi: ProviderRef,
+    pub dandanplay: Option<ProviderRef>,
+    pub summary: String,
+}
+
+/// Bridge a TMDB work/season to its Bangumi subject using dandanplay first
+/// (existing dandanplay link or authenticated dandanplay search whose
+/// `onlineDatabases` verifies the TMDB work), then Bangumi's public date+title
+/// search when unauthenticated or not linked on dandanplay.
+pub async fn bridge_bangumi(
+    work_ref: &ProviderRef,
+    titles: &[String],
+    season_number: Option<u32>,
+    premiere_date: &str,
+    existing_dandanplay_id: Option<&str>,
+) -> Option<Bridge> {
+    if let Some(ddp_id) = existing_dandanplay_id
+        && let Ok(d) = details(ddp_id, true).await
+        && let Some(bangumi) = d.bangumi_ref()
+    {
+        return Some(Bridge {
+            bangumi,
+            dandanplay: None,
+            summary: d.summary,
+        });
+    }
+    if let Some(token) = super::token() {
+        for title in titles.iter().take(2) {
+            let trimmed = title.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let query = format!("?keyword={}", super::encode(trimmed));
+            let Ok(reply) = read_from::<super::SearchReply>(
+                GATEWAYS,
+                "/api/v2/search/anime",
+                &query,
+                Some(&token),
+            )
+            .await
+            else {
+                continue;
+            };
+            if !reply.success {
+                continue;
+            }
+            let mut candidates = Vec::new();
+            for item in reply.animes.into_iter().take(5) {
+                if item.anime_id <= 0 {
+                    continue;
+                }
+                let id_str = item.anime_id.to_string();
+                let Ok(d) = details(&id_str, true).await else {
+                    continue;
+                };
+                if !d.tmdb_refs().contains(work_ref) {
+                    continue;
+                }
+                let Some(bangumi) = d.bangumi_ref() else {
+                    continue;
+                };
+                // For multi-season TV, require the dandanplay entry's premiere
+                // to fall near the selected TMDB season's premiere when both exist.
+                if let Some((t_y, t_m, t_d)) = erika_catalog::resolve::parse_ymd(premiere_date)
+                    && let Some((_, entry_date)) = erika_catalog::resolve::earliest_premiere(
+                        d.seasons
+                            .iter()
+                            .filter_map(|s| s.air_date.as_deref())
+                            .chain(d.episodes.iter().filter_map(|e| e.air_date.as_deref())),
+                    )
+                    && let Some((e_y, e_m, e_d)) = erika_catalog::resolve::parse_ymd(&entry_date)
+                {
+                    let approx = |y: u16, m: u8, day: u8| {
+                        i64::from(y) * 365 + i64::from(m) * 30 + i64::from(day)
+                    };
+                    if (approx(t_y, t_m, t_d) - approx(e_y, e_m, e_d)).abs() > 75 {
+                        continue;
+                    }
+                }
+                candidates.push(Bridge {
+                    bangumi,
+                    dandanplay: Some(ProviderRef {
+                        provider: Provider::Dandanplay,
+                        scope: String::new(),
+                        kind: Kind::Subject,
+                        id: id_str,
+                    }),
+                    summary: d.summary,
+                });
+            }
+            candidates.dedup_by(|a, b| a.bangumi == b.bangumi);
+            if candidates.len() == 1 {
+                return candidates.pop();
+            }
+        }
+    }
+    let subject = super::bangumi::find_subject(titles, season_number, premiere_date).await?;
+    Some(Bridge {
+        bangumi: ProviderRef {
+            provider: Provider::Bangumi,
+            scope: String::new(),
+            kind: Kind::Subject,
+            id: subject.id.to_string(),
+        },
+        dandanplay: None,
+        summary: subject.summary,
+    })
 }
 
 /// Read online danmaku independently from the TMDB content binding.
@@ -447,6 +622,10 @@ const GATEWAYS: &[&str] = &[
     "https://nipaplay.aimes-soft.com/dandanplay",
     "http://43.142.85.190/dandanplay",
 ];
+static PREFERRED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// The public cache lives on the second gateway; try it first while keeping
+/// full failover to the other gateway.
+static PUBLIC_PREFERRED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 
 async fn read_from<T: DeserializeOwned>(
     gateways: &[&str],
@@ -456,6 +635,10 @@ async fn read_from<T: DeserializeOwned>(
 ) -> Result<T> {
     use base64::Engine as _;
     use sha2::Digest as _;
+    use std::sync::atomic::Ordering;
+    if gateways.is_empty() {
+        return Err(Error::new("弹弹play 暂时无法连接"));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -472,8 +655,9 @@ async fn read_from<T: DeserializeOwned>(
             super::APP_SECRET
         )));
     let timestamp = timestamp.to_string();
+    let public = path.starts_with("/public/");
     let authorization = token
-        .filter(|_| !path.starts_with("/public/"))
+        .filter(|_| !public)
         .map(|token| format!("Bearer {token}"));
     let mut headers = vec![
         ("Accept", "application/json"),
@@ -484,8 +668,21 @@ async fn read_from<T: DeserializeOwned>(
     if let Some(value) = &authorization {
         headers.push(("Authorization", value));
     }
+    let slot = if public {
+        &PUBLIC_PREFERRED
+    } else {
+        &PREFERRED
+    };
+    let shared = std::ptr::eq(gateways, GATEWAYS);
+    let first = if shared {
+        slot.load(Ordering::Relaxed) % gateways.len()
+    } else {
+        0
+    };
     let mut last = Error::new("弹弹play 暂时无法连接");
-    for base in gateways {
+    for step in 0..gateways.len() {
+        let index = (first + step) % gateways.len();
+        let base = gateways[index];
         let response = erika_catalog::http::get(
             &format!("{base}{path}{query}"),
             &headers,
@@ -502,7 +699,20 @@ async fn read_from<T: DeserializeOwned>(
             last = Error::new(format!("弹弹play 请求失败（{}）", response.status));
             continue;
         }
-        match serde_json::from_slice(&response.body) {
+        if shared {
+            slot.store(index, Ordering::Relaxed);
+        }
+        let parsed = if public && let Ok(text) = std::str::from_utf8(&response.body) {
+            let origin = base.trim_end_matches("/dandanplay");
+            let resolved = text.replace(
+                "\"/dandanplay/public/images/",
+                &format!("\"{origin}/dandanplay/public/images/"),
+            );
+            serde_json::from_str(&resolved)
+        } else {
+            serde_json::from_slice(&response.body)
+        };
+        match parsed {
             Ok(value) => return Ok(value),
             Err(_) => last = Error::new("弹弹play 回答格式不正确"),
         }
@@ -627,7 +837,7 @@ mod tests {
                     header.contains("authorization: bearer test-only-token"),
                     !public
                 );
-                let body = "{\"success\":true,\"bangumiList\":[{\"animeId\":42,\"animeTitle\":\"Calendar\"}]}";
+                let body = "{\"success\":true,\"bangumiList\":[{\"animeId\":42,\"animeTitle\":\"Calendar\",\"imageUrl\":\"/dandanplay/public/images/cover.jpg\"}]}";
                 write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -636,9 +846,10 @@ mod tests {
                 .unwrap();
             }
         });
+        let base_with_prefix = format!("{base}/dandanplay");
         for path in ["/public/season", "/api/v2/bangumi/shin"] {
             let result: super::super::ShinReply = futures_lite::future::block_on(read_from(
-                &[&base],
+                &[&base_with_prefix],
                 path,
                 "",
                 Some("test-only-token"),
@@ -646,6 +857,17 @@ mod tests {
             .unwrap();
             assert!(result.success);
             assert_eq!(result.bangumi_list[0].anime_id, 42);
+            if path.starts_with("/public/") {
+                assert_eq!(
+                    result.bangumi_list[0].image_url,
+                    format!("{base}/dandanplay/public/images/cover.jpg")
+                );
+            } else {
+                assert_eq!(
+                    result.bangumi_list[0].image_url,
+                    "/dandanplay/public/images/cover.jpg"
+                );
+            }
         }
         worker.join().unwrap();
     }
@@ -669,6 +891,20 @@ mod tests {
         assert_eq!(r.bangumi_subject.unwrap().id, "123");
         assert_eq!(r.work.unwrap().id, "tmdb-tv-100");
         assert_eq!(evidence(&matched, None).unwrap().episode_number, None);
+
+        let dated: Details = serde_json::from_value(serde_json::json!({
+            "animeId": 42,
+            "animeTitle": "青之芦苇 第二季",
+            "type": "tvseries",
+            "titles": [{"language": "别名", "title": "Ao Ashi Season 2"}],
+            "episodes": [{"episodeId": 42009999, "episodeNumber": "1", "airDate": "2026-10-04T00:00:00"}]
+        }))
+        .unwrap();
+        let dated = evidence(&matched, Some(&dated)).unwrap();
+        assert_eq!(dated.kind, Some(Kind::Tv));
+        assert_eq!(dated.year, Some(2026));
+        assert_eq!(dated.premiere_date.as_deref(), Some("2026-10-04"));
+        assert!(dated.titles.iter().any(|t| t == "Ao Ashi Season 2"));
     }
     #[test]
     fn labels_are_not_inferred_from_provider_season_ids_or_url_lookalikes() {

@@ -7,16 +7,16 @@ use crate::{
 use rusqlite::{Connection, OptionalExtension, Result, TransactionBehavior, params};
 use std::path::Path;
 
-mod portable;
+mod account_sync;
 mod catalog;
 mod catalog_jobs;
-mod account_sync;
-mod schema;
+mod catalog_playback;
 mod catalog_portable;
 mod catalog_resolution;
-mod catalog_playback;
 mod catalog_selection;
 mod plugin_sources;
+mod portable;
+mod schema;
 #[cfg(test)]
 mod settings_tests;
 
@@ -32,8 +32,10 @@ fn sql_error(error: impl std::error::Error + Send + Sync + 'static) -> rusqlite:
     rusqlite::Error::ToSqlConversionFailure(Box::new(error))
 }
 fn invalid_schema() -> rusqlite::Error {
-    sql_error(std::io::Error::new(std::io::ErrorKind::InvalidData,
-        "数据库格式不匹配；此开发版不提供旧数据迁移，原文件未修改"))
+    sql_error(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "数据库格式不匹配；此开发版不提供旧数据迁移，原文件未修改",
+    ))
 }
 
 /// One connection to the app's database.
@@ -90,7 +92,9 @@ impl Db {
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         let app: i64 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
         let structure = schema::structure(conn)?;
-        if structure.is_empty() && version == 0 && app == 0 { return Ok(false); }
+        if structure.is_empty() && version == 0 && app == 0 {
+            return Ok(false);
+        }
         if version == SCHEMA_VERSION && app == APPLICATION_ID && schema::matches(&structure)? {
             return Ok(true);
         }
@@ -98,7 +102,9 @@ impl Db {
     }
 
     fn initialize(&mut self) -> Result<()> {
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         if !Self::check_schema(&tx)? {
             schema::create(&tx)?;
             tx.pragma_update(None, "application_id", APPLICATION_ID)?;
@@ -295,9 +301,12 @@ impl Db {
 
     /// Read a setting without treating a storage failure as a missing value.
     pub fn try_setting(&self, key: &str) -> crate::catalog::Result<Option<String>> {
-        Ok(self.conn.query_row(
-            "SELECT value FROM setting WHERE key = ?1", [key], |row| row.get(0),
-        ).optional()?)
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM setting WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?)
     }
 
     /// Atomically read, transform and replace one setting across connections.
@@ -309,9 +318,11 @@ impl Db {
         update: impl FnOnce(Option<&str>) -> crate::catalog::Result<(Option<String>, T)>,
     ) -> crate::catalog::Result<T> {
         let tx = catalog::transaction(&self.conn)?;
-        let old: Option<String> = tx.query_row(
-            "SELECT value FROM setting WHERE key = ?1", [key], |row| row.get(0),
-        ).optional()?;
+        let old: Option<String> = tx
+            .query_row("SELECT value FROM setting WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?;
         let (value, result) = update(old.as_deref())?;
         match value {
             Some(value) => tx.execute(
@@ -804,7 +815,10 @@ impl Db {
         logged(
             (|| {
                 let tx = catalog::transaction(&self.conn).map_err(sql_error)?;
-                tx.execute("UPDATE file SET episode_id=NULL,matched_by='none' WHERE id=?1", [file])?;
+                tx.execute(
+                    "UPDATE file SET episode_id=NULL,matched_by='none' WHERE id=?1",
+                    [file],
+                )?;
                 tx.commit()
             })(),
             "unlink a file",

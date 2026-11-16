@@ -3,10 +3,13 @@ use super::*;
 fn source_op(id: &str, server: &str) -> Op {
     let location = serde_json::json!(["test.restore", id, server]).to_string();
     Op {
-        category: SOURCES.into(), key: format!("plugin\n{location}"),
+        category: SOURCES.into(),
+        key: format!("plugin\n{location}"),
         value: Some(Value::map([
-            ("kind", Value::text("plugin")), ("name", Value::text("来源")),
-            ("location", Value::text(location)), ("content", Value::text("movie")),
+            ("kind", Value::text("plugin")),
+            ("name", Value::text("来源")),
+            ("location", Value::text(location)),
+            ("content", Value::text("movie")),
             ("added", Value::Int(123)),
         ])),
     }
@@ -14,7 +17,10 @@ fn source_op(id: &str, server: &str) -> Op {
 
 #[test]
 fn source_restore_errors_roll_back_media_and_settings_before_external_side_effects() {
-    let dir = std::env::temp_dir().join(format!("erika-source-restore-{}", erika_catalog::MediaId::new().0));
+    let dir = std::env::temp_dir().join(format!(
+        "erika-source-restore-{}",
+        erika_catalog::MediaId::new().0
+    ));
     std::fs::create_dir(&dir).unwrap();
     let store = Store::directory(&dir);
     let vault = MemoryVault::default();
@@ -22,54 +28,102 @@ fn source_restore_errors_roll_back_media_and_settings_before_external_side_effec
     store.write("welcome-v1", b"old").unwrap();
     let db = Db::in_memory();
     let mut device = Device::new(&db, &store, &vault, Scope::Export);
-    device.apply(&[source_op("library", "server-a")], None).unwrap();
+    device
+        .apply(&[source_op("library", "server-a")], None)
+        .unwrap();
     let before = device.collect(None).unwrap();
     let applied = device.applied.clone();
-    let node = erika_catalog::tmdb::parse_work(erika_catalog::Kind::Movie, 71,
-        &serde_json::json!({"id":71,"title":"待恢复电影"})).unwrap().node;
+    let node = erika_catalog::tmdb::parse_work(
+        erika_catalog::Kind::Movie,
+        71,
+        &serde_json::json!({"id":71,"title":"待恢复电影"}),
+    )
+    .unwrap()
+    .node;
     let media = crate::catalog::records(&erika_store::catalog::CatalogSnapshot {
-        nodes: vec![node], ..Default::default()
-    }).unwrap();
-    for mut bad in [source_op("library", "server-b"), source_op("library", "server-a")] {
-        if bad.key.ends_with("server-a\"]") { bad.key = "plugin\nforged-key".into(); }
+        nodes: vec![node],
+        ..Default::default()
+    })
+    .unwrap();
+    for mut bad in [
+        source_op("library", "server-b"),
+        source_op("library", "server-a"),
+    ] {
+        if bad.key.ends_with("server-a\"]") {
+            bad.key = "plugin\nforged-key".into();
+        }
         device.collect(None).unwrap();
         let mut ops = crate::merge::diff(&State::new(), &media);
         ops.extend([
-            Op { category: SETTINGS.into(), key:"autoplay".into(), value:Some(Value::text("false")) },
-            Op { category: STORE.into(), key:"welcome-v1".into(), value:Some(Value::Bytes(b"new".to_vec())) },
-            Op { category: ACCOUNTS.into(), key:"dandanplay".into(), value:None },
-            source_op("new-library", "server-a"), bad,
+            Op {
+                category: SETTINGS.into(),
+                key: "autoplay".into(),
+                value: Some(Value::text("false")),
+            },
+            Op {
+                category: STORE.into(),
+                key: "welcome-v1".into(),
+                value: Some(Value::Bytes(b"new".to_vec())),
+            },
+            Op {
+                category: ACCOUNTS.into(),
+                key: "dandanplay".into(),
+                value: None,
+            },
+            source_op("new-library", "server-a"),
+            bad,
         ]);
         assert!(device.apply(&ops, None).is_err());
         assert_eq!(device.collect(None).unwrap(), before);
         assert_eq!(device.applied, applied);
-        assert_eq!(vault.read(DANDANPLAY_TOKEN).as_deref(),Some("fake-restore-account"));
+        assert_eq!(
+            vault.read(DANDANPLAY_TOKEN).as_deref(),
+            Some("fake-restore-account")
+        );
         assert_eq!(store.read("welcome-v1").unwrap().unwrap(), b"old");
-        assert_eq!(db.plugin_source_ids("test.restore").unwrap().len(),1);
+        assert_eq!(db.plugin_source_ids("test.restore").unwrap().len(), 1);
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 fn both_sync_scopes_restore_source_ownership_and_registration_is_idempotent() {
-    let dir = std::env::temp_dir().join(format!("erika-source-roundtrip-{}", erika_catalog::MediaId::new().0));
+    let dir = std::env::temp_dir().join(format!(
+        "erika-source-roundtrip-{}",
+        erika_catalog::MediaId::new().0
+    ));
     std::fs::create_dir(&dir).unwrap();
     let store = Store::directory(&dir);
     for scope in [Scope::Export, Scope::Repository] {
         let db = Db::in_memory();
-        db.add_source("folder", "本机目录", "file:///different", "movie").unwrap();
+        db.add_source("folder", "本机目录", "file:///different", "movie")
+            .unwrap();
         let mut device = Device::new(&db, &store, &NoVault, scope);
-        device.apply(&[source_op("library", "server-a")], None).unwrap();
+        device
+            .apply(&[source_op("library", "server-a")], None)
+            .unwrap();
         let id = device.applied.new_sources[0];
-        assert_eq!(db.plugin_source_ids("test.restore").unwrap(),vec![id]);
+        assert_eq!(db.plugin_source_ids("test.restore").unwrap(), vec![id]);
         let source = erika_store::plugin_sources::Descriptor {
-            id:"library".into(), server_id:"server-a".into(), name:"来源".into(), content:"movie".into(),
+            id: "library".into(),
+            server_id: "server-a".into(),
+            name: "来源".into(),
+            content: "movie".into(),
         };
-        assert_eq!(db.plugin_register_source("test.restore", &source).unwrap(),id);
-        device.apply(&[source_op("library", "server-a")], None).unwrap();
-        assert_eq!(device.applied.new_sources,vec![id]);
-        assert_eq!(db.sources().len(),2);
-        assert!(db.plugin_source_items("test.restore",id).unwrap().is_empty());
+        assert_eq!(
+            db.plugin_register_source("test.restore", &source).unwrap(),
+            id
+        );
+        device
+            .apply(&[source_op("library", "server-a")], None)
+            .unwrap();
+        assert_eq!(device.applied.new_sources, vec![id]);
+        assert_eq!(db.sources().len(), 2);
+        assert!(
+            db.plugin_source_items("test.restore", id)
+                .unwrap()
+                .is_empty()
+        );
     }
     std::fs::remove_dir_all(dir).unwrap();
 }

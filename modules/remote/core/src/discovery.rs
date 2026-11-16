@@ -46,9 +46,8 @@ impl Drop for Discovery {
 }
 
 fn asks(packet: &[u8]) -> bool {
-    serde_json::from_slice::<Value>(packet).is_ok_and(|value| {
-        value["type"] == "nipaplay_discover" && value["v"] == 1
-    })
+    serde_json::from_slice::<Value>(packet)
+        .is_ok_and(|value| value["type"] == "nipaplay_discover" && value["v"] == 1)
 }
 
 fn answer(port: u16) -> Value {

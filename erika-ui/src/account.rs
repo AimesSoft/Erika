@@ -12,7 +12,11 @@ pub struct AccountLoginDraft {
 
 #[cfg(feature = "bern-module-account")]
 #[component]
-pub fn account_dialogs(app: erika::Client, settings_window: bool, #[session] draft: AccountLoginDraft) -> impl View {
+pub fn account_dialogs(
+    app: erika::Client,
+    settings_window: bool,
+    #[session] draft: AccountLoginDraft,
+) -> impl View {
     ui! {
         if app.features.account && app.bangumi.prompt && app.bangumi.settings_window == settings_window {
             account_login(app: app, bangumi: true, busy: app.bangumi.busy, message: app.bangumi.error)

@@ -104,12 +104,16 @@ pub fn tv_scene(
                     Positioned(x: 0, y: 80, width: 1280, height: 640) {
                         if page == MainPage::Search {
                             if build.modules.anime && anime.opened != "" && anime.back == BackTo::Search {
-                                details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                                Stack(appear: detail_in, disappear: detail_out) {
+                                    details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                                }
                             } else {
                                 tv_search(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                             }
                         } else if build.modules.library && build.modules.anime && page == MainPage::Library && anime.opened != "" && anime.back == BackTo::Library {
-                            details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                            Stack(appear: detail_in, disappear: detail_out) {
+                                details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                            }
                         } else {
                             PageContent(slot: main, selected: draft.page)
                         }

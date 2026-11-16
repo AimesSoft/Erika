@@ -26,7 +26,8 @@ pub const ALL_MODULES: &[&str] = &[
 ];
 
 /// Whether a plugin turned the downloader on where Erika hides it.
-static DOWNLOADER_UNLOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static DOWNLOADER_UNLOCKED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// iOS hides the downloader, as NipaPlay does there, until a plugin with
 /// `system.override` turns it on (`system.setDownloaderEnabled`).
@@ -104,6 +105,7 @@ pub fn default_preferences() -> Preferences {
         show_danmaku: true,
         auto_match: true,
         sync_storage: true,
+        merge_seasons: false,
         startup: StartupPage::Home,
         playback_end: PlaybackEnd::Next,
         language: InterfaceLanguage::System,
@@ -277,7 +279,13 @@ mod tests {
         assert!(engine.state.features.plugins);
         // Erika runs them: no module starts for them, and the modules'
         // callbacks keep the choice.
-        assert!(!engine.initial_modules().unwrap().iter().any(|id| id == "plugins"));
+        assert!(
+            !engine
+                .initial_modules()
+                .unwrap()
+                .iter()
+                .any(|id| id == "plugins")
+        );
         engine.modules_changed(&[]);
         assert!(engine.state.features.plugins);
         assert_eq!(engine.state.preset, OnboardingPreset::Custom);

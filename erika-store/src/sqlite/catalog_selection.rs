@@ -13,16 +13,27 @@ impl Db {
     /// A known file may have no current address; an unknown file is an error.
     pub fn catalog_addresses(&self, file: i64) -> Result<Vec<AddressCheck>> {
         let exists: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM file WHERE id=?1)", [file], |r| r.get(0),
+            "SELECT EXISTS(SELECT 1 FROM file WHERE id=?1)",
+            [file],
+            |r| r.get(0),
         )?;
-        if !exists { return Err(Error::invalid("文件不存在")); }
+        if !exists {
+            return Err(Error::invalid("文件不存在"));
+        }
         let mut stmt = self.conn.prepare(
             "SELECT rowid,source_id,path FROM address WHERE file_id=?1
              ORDER BY source_id=?2,seen_at DESC,rowid DESC",
         )?;
-        Ok(stmt.query_map(params![file, super::OPENED], |r| Ok(AddressCheck {
-            key: r.get(0)?, source: r.get(1)?, url: r.get(2)?, file,
-        }))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(stmt
+            .query_map(params![file, super::OPENED], |r| {
+                Ok(AddressCheck {
+                    key: r.get(0)?,
+                    source: r.get(1)?,
+                    url: r.get(2)?,
+                    file,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn catalog_apply_selection(

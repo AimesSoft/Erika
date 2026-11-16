@@ -4,7 +4,9 @@
 //! preference changes go through the owning engine's protocol.
 use crate::AppWindows;
 #[cfg(feature = "bern-module-account")]
-use crate::account::{account_dialogs, account_dialogs_props, account_profile, account_profile_props};
+use crate::account::{
+    account_dialogs, account_dialogs_props, account_profile, account_profile_props,
+};
 use crate::plugin_info::{plugin_actions, plugin_actions_props, plugin_info, plugin_info_props};
 use bern::prelude::*;
 #[cfg(feature = "bern-module-anime")]
@@ -504,7 +506,11 @@ pub fn tv_settings(
 /// dialog. Only their data and authentication commands differ.
 #[cfg(feature = "bern-module-account")]
 #[component]
-pub fn settings_account(app: erika::Client, settings_window: bool, #[session] draft: SettingsDraft) -> impl View {
+pub fn settings_account(
+    app: erika::Client,
+    settings_window: bool,
+    #[session] draft: SettingsDraft,
+) -> impl View {
     ui! {
         Form(title: tr! { "zh-Hans" => "账号", "en" => "Account" }, variant: settings_form, appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "弹弹play 账号", "en" => "dandanplay account" }) {
@@ -762,6 +768,7 @@ pub fn settings_library(app: erika::Client) -> impl View {
     ui! {
         Form(title: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, variant: settings_form, appear: settings_page_in) {
             Section {
+                Switch(id: merge_seasons, label: tr! { "zh-Hans" => "合并同系列多季番剧", "en" => "Merge seasons of the same series" }, checked: app.preferences.merge_seasons, style: switch) => app.set_preference("merge_seasons", app.preferences.merge_seasons)
                 Switch(id: sync_storage, label: tr! { "zh-Hans" => "同步与存储", "en" => "Sync and storage" }, checked: app.preferences.sync_storage, style: switch) => app.set_preference("sync_storage", app.preferences.sync_storage)
             }
         }
