@@ -373,7 +373,9 @@ def animated_logo(pairs):
             '    wink   左眼眨成弧线、甩出一颗小星星，歪头（1.5s）\n'
             '    摸头   像猫一样被按住左右蹭，眼睛眯成「︶」，嘴变「ω」，脸红，冒小心心（2.6s）\n'
             '    坏笑   古户绘梨花的招牌表情：眼皮压成斜的半眯眼，皱一边眉毛，嘴角一歪，抬下巴，帽子闪一下（2.8s）\n-->')
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 1056 1056" width="1024" height="1024" role="img" aria-label="Erika">'
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 1056 1056" width="1024" height="1024" '
+            f'data-bern-ready="2.3s" data-bern-dblclick="random(do-wink: 1.5s, do-pet: 2.6s, do-smug: 2.8s)" '
+            f'role="img" aria-label="Erika">'
             f'{note}{body}</svg>\n')
 
 
