@@ -13,9 +13,9 @@ license = "MIT"
 # All native HTTP callers inherit Windows Internet Settings as well as proxy
 # environment variables. Keep this here so independently built modules do too.
 ureq = { version = "3", features = ["win-system-proxy"] }
-# Bern 0.1.17+, at the same immutable revision as the build tool
+# Bern 0.1.19+, at the same immutable revision as the build tool
 # (docs/dependencies.md).
-bern = { git = "https://github.com/AimesSoft/Bern", rev = "4d2a099d82d4f8813e131e30b5dc8b25b70ba3b1" }
+bern = { git = "https://github.com/AimesSoft/Bern", rev = "5310e26dcb8fbe4ddba0bc218736162ff98926e7" }
 erika-protocol = { path = "erika-protocol", default-features = false }
 erika-store = { path = "erika-store" }
 erika-catalog = { path = "erika-catalog" }
