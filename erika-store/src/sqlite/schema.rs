@@ -11,7 +11,15 @@ pub(super) fn structure(conn: &Connection) -> Result<Structure> {
         "SELECT type,name,tbl_name,sql FROM sqlite_master
          WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name",
     )?
-    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+    .query_map([], |r| {
+        let sql: Option<String> = r.get(3)?;
+        Ok((
+            r.get(0)?,
+            r.get(1)?,
+            r.get(2)?,
+            sql.map(|s| s.replace("\r\n", "\n")),
+        ))
+    })?
     .collect()
 }
 
@@ -86,5 +94,32 @@ mod tests {
         db.conn.execute_batch("ANALYZE").unwrap();
         assert!(Db::check_schema(&db.conn).unwrap());
         assert_eq!(db.setting("test").as_deref(), Some("kept"));
+    }
+
+    #[test]
+    fn crlf_created_schema_matches_lf_build() {
+        let root =
+            std::env::temp_dir().join(format!("erika-crlf-{}", erika_catalog::MediaId::new()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("crlf.sqlite");
+        let conn = Connection::open(&path).unwrap();
+        let crlf_sql = format!(
+            "{}\r\n{}\r\n{}",
+            SCHEMA.replace('\n', "\r\n"),
+            include_str!("catalog.sql").replace('\n', "\r\n"),
+            include_str!("plugin_sources.sql").replace('\n', "\r\n"),
+        );
+        conn.execute_batch(&crlf_sql).unwrap();
+        conn.pragma_update(None, "application_id", APPLICATION_ID)
+            .unwrap();
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .unwrap();
+        drop(conn);
+
+        let db = Db::at(&path).unwrap();
+        db.set_setting("crlf_compat", Some("ok"));
+        assert_eq!(db.setting("crlf_compat").as_deref(), Some("ok"));
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

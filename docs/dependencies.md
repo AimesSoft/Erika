@@ -38,6 +38,25 @@ cp .cargo/config.local.example.toml .cargo/config.toml
 
 本地 patch 会让 Cargo 调整 `Cargo.lock` 中的来源；该文件仍应提交远程 Git 来源的版本。发布或更新锁文件时，在没有本地配置的干净检出中执行 `cargo generate-lockfile`，再执行 `cargo check --locked`。本地联调用普通 `cargo check`，不加 `--locked`。
 
+## BitTorrent 下载库补丁
+
+`erika-torrent` 通过仓库内相对路径固定使用 `third_party/librqbit` 的 8.1.1（保留原有 `rust-tls` 特性），`third_party/librqbit` 又通过相对路径使用 `third_party/librqbit-dht` 的 5.3.1。直接路径依赖也会传递到 Bern 生成的独立宿主工作区，不依赖根清单的 `[patch]`。上游版本、提交、Apache-2.0 许可证和补丁移除条件见 [ERIKA-PATCHES.md](../third_party/librqbit/ERIKA-PATCHES.md) 与 [ERIKA-PATCHES.md](../third_party/librqbit-dht/ERIKA-PATCHES.md)。
+
+补丁不改变 tracker、代理、节点标识或画质选择，只修正影响可用性与连接调度的底层缺陷：
+
+- 分段握手补读（`third_party/librqbit/src/read_buf.rs`）：在原有总超时内补读完整 68 字节握手并保留同包后续消息；
+- 状态感知的读空闲超时、并发拨号槽位分离与请求配额上限（`peer_connection.rs`、`chunk_tracker.rs`、`torrent_state/live/mod.rs`）：持有所需分片等待放行的节点覆盖 BEP 3 的 120 秒 Keep-Alive 窗口，空壳节点快速释放，避免 `Unchoke/Choke` 抖动溢出 128 请求配额，拨号超时不挤占活跃槽位；
+- Windows UDP DHT 抗瞬态 ICMP 差错（`third_party/librqbit-dht/src/dht.rs`）：`DhtWorker::framer` 忽略 Windows Winsock 的 `10052`/`10054`/`10040` 等单包 ICMP 重置，防止 DHT 工作线程启动后因连接重置退出。
+
+运行协议与 DHT 回归：
+
+```sh
+cargo test --manifest-path third_party/librqbit-dht/Cargo.toml --lib
+cargo test --manifest-path third_party/librqbit/Cargo.toml --no-default-features --features rust-tls --lib
+```
+
+应用封装另运行 `cargo test -p erika-torrent`。以上修复不保证特定冷门资源必然有做种者，实际恢复仍需核对校验分片与下载进度。
+
 ## 原生播放依赖
 
 Cargo 管理 Rust 源码，FFmpeg、libass 等原生库仍需按 liberika 的构建文档准备。下面的命令自动定位 Cargo 实际选中的源码，Git 下载和本地 patch 都适用：
