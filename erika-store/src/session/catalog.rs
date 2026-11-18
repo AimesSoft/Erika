@@ -1,7 +1,8 @@
 //! Transactional catalogue for the browser's shared in-memory session.
 use super::{Db, State};
 use crate::catalog::{
-    BindingChange, Error, MediaFile, MediaMark, MediaShelf, MediaWatching, Result,
+    BindingChange, Error, MediaFile, MediaMark, MediaShelf, MediaShelves, MediaWatching, Result,
+    fold_shelves,
 };
 use erika_catalog::*;
 use std::collections::{BTreeMap, HashSet};
@@ -688,48 +689,23 @@ impl Db {
         self.read(|s| s.media_files(&s.catalog.canonical(id)?))
     }
     pub fn catalog_shelf(&self, source: Option<i64>) -> Result<Vec<MediaShelf>> {
-        self.read(|s| {
-            let mut groups: BTreeMap<MediaId, (MediaNode, BTreeMap<MediaId, bool>, i64, i64)> =
-                BTreeMap::new();
-            for a in &s.addresses {
-                if source.is_some_and(|id| id != a.source) {
-                    continue;
-                }
-                let Some(b) = a.file.and_then(|id| s.catalog.bindings.get(&id)) else {
-                    continue;
-                };
-                for item in &b.items {
-                    let n = s.catalog.node(&item.media)?;
-                    let root = s.catalog.node(&n.root)?;
-                    let watched = s.catalog.watched.get(&n.id).is_some_and(|w| w.watched);
-                    let group = groups.entry(root.id.clone()).or_insert((
-                        root.clone(),
-                        BTreeMap::new(),
-                        a.seen,
-                        a.seen,
-                    ));
-                    *group.1.entry(n.id.clone()).or_default() |= watched;
-                    group.2 = group.2.min(a.seen);
-                    group.3 = group.3.max(a.seen);
-                }
-            }
-            let mut rows: Vec<_> = groups
-                .into_values()
-                .map(|(node, items, added, seen)| MediaShelf {
-                    node,
-                    episodes: items.len() as i64,
-                    watched: items.values().filter(|v| **v).count() as i64,
-                    added,
-                    seen,
-                })
-                .collect();
-            rows.sort_by(|a, b| b.seen.cmp(&a.seen).then_with(|| a.node.id.cmp(&b.node.id)));
-            Ok(rows)
-        })
+        Ok(self
+            .shelves(source, true, false)?
+            .remove(&0)
+            .unwrap_or_default())
     }
     pub fn catalog_season_shelf(&self, source: Option<i64>) -> Result<Vec<MediaShelf>> {
+        Ok(self
+            .shelves(source, false, false)?
+            .remove(&0)
+            .unwrap_or_default())
+    }
+    pub fn catalog_shelves(&self, merged: bool) -> Result<MediaShelves> {
+        self.shelves(None, merged, true)
+    }
+    fn shelves(&self, source: Option<i64>, merged: bool, by_source: bool) -> Result<MediaShelves> {
         self.read(|s| {
-            let mut raw = Vec::new();
+            let mut groups = BTreeMap::<_, Vec<_>>::new();
             for a in &s.addresses {
                 if source.is_some_and(|id| id != a.source) {
                     continue;
@@ -740,16 +716,26 @@ impl Db {
                 for item in &b.items {
                     let n = s.catalog.node(&item.media)?;
                     let root = s.catalog.node(&n.root)?;
-                    let parent = n
-                        .parent
-                        .as_ref()
-                        .map(|pid| s.catalog.node(pid).cloned())
-                        .transpose()?;
+                    let season = if merged {
+                        None
+                    } else {
+                        n.parent
+                            .as_ref()
+                            .map(|id| s.catalog.node(id).cloned())
+                            .transpose()?
+                    };
                     let watched = s.catalog.watched.get(&n.id).is_some_and(|w| w.watched);
-                    raw.push((root.clone(), parent, n.id.clone(), watched, a.seen));
+                    let scope = if by_source { a.source } else { 0 };
+                    groups.entry(scope).or_default().push((
+                        root.clone(),
+                        season,
+                        n.id.clone(),
+                        watched,
+                        a.seen,
+                    ));
                 }
             }
-            Ok(crate::catalog::fold_season_shelf(raw))
+            Ok(fold_shelves(groups, by_source))
         })
     }
     pub fn catalog_watching(&self, limit: usize) -> Result<Vec<MediaWatching>> {

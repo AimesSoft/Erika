@@ -177,11 +177,12 @@ fn deliver_metadata(inbox: &Arc<Mutex<Vec<Done>>>) -> impl FnOnce(Finished) + Se
 impl AnimeEngine {
     /// Cache only real TMDB nodes; a source list is not a content binding.
     fn save_metadata(
-        &self,
+        &mut self,
         work: &tmdb::Work,
         season: Option<&tmdb::Season>,
     ) -> erika_store::catalog::Result<(MediaId, Option<MediaId>)> {
         let stored = self.db.catalog_save_nodes(&nodes(work, season))?;
+        self.catalog_written = true;
         if let Some(key) = content::original_overview_key(&work.node) {
             if !work.node.overview.trim().is_empty() {
                 self.db.set_setting(&key, None);
@@ -681,14 +682,16 @@ impl AnimeEngine {
                     }
                 }
                 if changed {
+                    self.catalog_written = true;
                     self.show_season();
                     self.show_opened();
                 }
             }
             Finished::Configuration(Ok(config)) => {
                 self.metadata.configuring = false;
-                if let Err(e) = self.db.catalog_save_images(&config) {
-                    self.state.error = e.message;
+                match self.db.catalog_save_images(&config) {
+                    Ok(()) => self.catalog_written = true,
+                    Err(e) => self.state.error = e.message,
                 }
                 self.show_season();
                 self.show_opened();
@@ -703,7 +706,7 @@ impl AnimeEngine {
                     && let Ok(bundle) = result
                 {
                     if let Some(config) = &bundle.images {
-                        let _ = self.db.catalog_save_images(config);
+                        self.catalog_written |= self.db.catalog_save_images(config).is_ok();
                     }
                     let mut changed = false;
                     for item in bundle.items {

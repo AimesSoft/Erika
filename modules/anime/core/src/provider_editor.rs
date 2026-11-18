@@ -230,6 +230,7 @@ impl AnimeEngine {
             },
             false,
         )?;
+        anime::emit::catalog_changed();
         // Invalidate in-flight observations; linking alone does not send account
         // writes or invent episode mappings from a subject's episode numbers.
         self.syncs.change_view(&mut self.state);

@@ -68,47 +68,64 @@ pub struct MediaShelf {
     pub seen: i64,
 }
 
-pub(crate) fn fold_season_shelf(
-    raw: Vec<(MediaNode, Option<MediaNode>, MediaId, bool, i64)>,
-) -> Vec<MediaShelf> {
+/// Unfiltered shelves in browse order. Key 0 is the whole library; the other
+/// keys are source IDs. An absent source has no bound media.
+pub type MediaShelves = std::collections::BTreeMap<i64, Vec<MediaShelf>>;
+pub(crate) type ShelfItem = (MediaNode, Option<MediaNode>, MediaId, bool, i64);
+
+/// Fold each scope separately: a special may belong to different cards in
+/// its source and in the whole library. Borrow the same input for both folds.
+pub(crate) fn fold_shelves(
+    groups: std::collections::BTreeMap<i64, Vec<ShelfItem>>,
+    include_whole: bool,
+) -> MediaShelves {
+    let whole = include_whole.then(|| fold_season_shelf(groups.values().flatten()));
+    let mut shelves: MediaShelves = groups
+        .into_iter()
+        .map(|(id, items)| (id, fold_season_shelf(items.iter())))
+        .collect();
+    if let Some(whole) = whole {
+        shelves.insert(0, whole);
+    }
+    shelves
+}
+
+fn fold_season_shelf<'a>(raw: impl Iterator<Item = &'a ShelfItem> + Clone) -> Vec<MediaShelf> {
     use std::collections::BTreeMap;
-    let mut first_regular: BTreeMap<MediaId, MediaNode> = BTreeMap::new();
-    for (root, parent, _, _, _) in &raw {
+    let mut first_regular: BTreeMap<MediaId, &MediaNode> = BTreeMap::new();
+    for (root, parent, _, _, _) in raw.clone() {
         if let Some(season) = parent
             && season.season_number.is_some_and(|n| n >= 1)
         {
             first_regular
                 .entry(root.id.clone())
                 .and_modify(|cur| {
-                    if season.season_number < cur.season_number {
-                        *cur = season.clone();
+                    if (season.season_number, &season.id) < (cur.season_number, &cur.id) {
+                        *cur = season;
                     }
                 })
-                .or_insert_with(|| season.clone());
+                .or_insert(season);
         }
     }
-    let mut groups: BTreeMap<MediaId, (MediaNode, BTreeMap<MediaId, bool>, i64, i64)> =
+    let mut groups: BTreeMap<&MediaId, (&MediaNode, BTreeMap<&MediaId, bool>, i64, i64)> =
         BTreeMap::new();
     for (root, parent, item_id, watched, seen) in raw {
         let entry = match parent {
             Some(season) if season.season_number.is_some_and(|n| n >= 1) => season,
-            Some(_) => first_regular
-                .get(&root.id)
-                .cloned()
-                .unwrap_or_else(|| root.clone()),
+            Some(_) => first_regular.get(&root.id).copied().unwrap_or(root),
             None => root,
         };
         let group = groups
-            .entry(entry.id.clone())
-            .or_insert((entry, BTreeMap::new(), seen, seen));
-        *group.1.entry(item_id).or_default() |= watched;
-        group.2 = group.2.min(seen);
-        group.3 = group.3.max(seen);
+            .entry(&entry.id)
+            .or_insert_with(|| (entry, BTreeMap::new(), *seen, *seen));
+        *group.1.entry(item_id).or_default() |= *watched;
+        group.2 = group.2.min(*seen);
+        group.3 = group.3.max(*seen);
     }
     let mut rows: Vec<_> = groups
         .into_values()
         .map(|(node, items, added, seen)| MediaShelf {
-            node,
+            node: node.clone(),
             episodes: items.len() as i64,
             watched: items.values().filter(|v| **v).count() as i64,
             added,

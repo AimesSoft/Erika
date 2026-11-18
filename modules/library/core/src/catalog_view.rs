@@ -1,7 +1,7 @@
 //! Catalogue projections are shared by the wall, recent rows and source browser.
 use super::*;
 use erika_catalog::{Kind, MediaNode};
-use erika_store::catalog::{MediaShelf, Result};
+use erika_store::catalog::{MediaShelf, MediaShelves, Result};
 
 pub(super) struct Content {
     pub root: MediaNode,
@@ -79,7 +79,72 @@ pub(super) fn poster(
         movie: shelf.node.kind == Kind::Movie,
     }
 }
+/// Only the parts of a scoped wall that the global posters don't describe.
+/// This is a comparison key, not a second set of UI query results.
+#[derive(Default, PartialEq)]
+pub(super) struct SourceWalls {
+    names: BTreeMap<i64, String>,
+    /// The order matters for Recent and as the tie-breaker for Name/Rating.
+    rows: BTreeMap<i64, Vec<(erika_catalog::MediaId, i64, i64)>>,
+    /// A source with only specials may show the work root, even when the
+    /// global wall shows only seasons. Its title and artwork matter too.
+    extra: HashMap<erika_catalog::MediaId, LibraryPoster>,
+}
+
 impl LibraryEngine {
+    pub(super) fn update_walls(&mut self, sources: &[Source], shelves: Result<MediaShelves>) {
+        let mut shelves = match shelves {
+            Ok(shelves) => shelves,
+            Err(error) => {
+                // One unreadable source can break the batch while other scopes
+                // still answer. Without a comparison key, recheck live queries
+                // on each possible write, not just on the first read failure.
+                self.browse_sources = None;
+                self.state.browse_revision += 1;
+                self.notify(LibraryNotice::Failed {
+                    reason: error.message,
+                });
+                return;
+            }
+        };
+        let whole = shelves.remove(&0).unwrap_or_default();
+        let images = self.db.catalog_images();
+        let posters: Vec<_> = whole.iter().map(|s| poster(&self.db, s, &images)).collect();
+        let whole_ids: HashSet<_> = whole.iter().map(|s| &s.node.id).collect();
+        let mut inputs = SourceWalls {
+            names: sources.iter().map(|s| (s.id, s.name.clone())).collect(),
+            ..Default::default()
+        };
+        for (source, shelf) in shelves {
+            let rows = shelf
+                .into_iter()
+                .map(|s| {
+                    if !whole_ids.contains(&s.node.id) {
+                        inputs
+                            .extra
+                            .entry(s.node.id.clone())
+                            .or_insert_with(|| poster(&self.db, &s, &images));
+                    }
+                    (s.node.id, s.episodes, s.watched)
+                })
+                .collect();
+            inputs.rows.insert(source, rows);
+        }
+        if posters != self.state.posters || self.browse_sources.as_ref() != Some(&inputs) {
+            self.state.browse_revision += 1;
+        }
+        self.browse_sources = Some(inputs);
+        let mut added: Vec<_> = whole.iter().zip(&posters).collect();
+        added.sort_by_key(|(s, _)| std::cmp::Reverse(s.added));
+        self.state.recent = added
+            .into_iter()
+            .take(RECENT)
+            .map(|(_, p)| p.clone())
+            .collect();
+        self.state.has_recent = !self.state.recent.is_empty();
+        self.state.posters = posters;
+    }
+
     pub(super) fn load_contents(&mut self, entries: &[Entry]) -> Result<()> {
         let mut contents = HashMap::new();
         let mut seen = HashSet::new();

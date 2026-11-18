@@ -374,7 +374,7 @@ impl AnimeEngine {
                 });
             }
             if !links.is_empty() {
-                let _ = self.db.catalog_apply(&[], &links, &[], &[]);
+                self.catalog_written |= self.db.catalog_apply(&[], &links, &[], &[]).is_ok();
             }
             if !bridge.summary.trim().is_empty()
                 && let Some(ddp) = &bridge.dandanplay
@@ -415,6 +415,7 @@ impl AnimeEngine {
                     self.refresh_opened_summary();
                 }
                 if changed {
+                    self.catalog_written = true;
                     self.show_opened();
                     self.show_season();
                 }

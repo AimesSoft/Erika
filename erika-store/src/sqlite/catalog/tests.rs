@@ -87,6 +87,67 @@ fn canonical_identity_has_real_seasons_movies_and_multiple_versions() {
 }
 
 #[test]
+fn unreadable_shelf_is_not_an_empty_library_and_other_sources_remain_readable() {
+    let db = Db::in_memory();
+    let store_movie = |number, hex: &str| {
+        let path = format!("file:///{hex}");
+        let source = db.add_source("folder", hex, &path, "movie").unwrap();
+        let fp = Fingerprint {
+            md5: hex.repeat(32),
+            size: 100,
+        };
+        let file = db
+            .saw(source, &format!("{path}/movie.mkv"), 100, 1, Some(&fp))
+            .unwrap();
+        let film = movie(number);
+        db.catalog_apply(
+            std::slice::from_ref(&film),
+            &[],
+            &[bind(file, &film, 0, Decision::Manual)],
+            &[],
+        )
+        .unwrap();
+        (source, film.id)
+    };
+    let (good, good_id) = store_movie(1, "a");
+    let (bad, bad_id) = store_movie(2, "b");
+    let broken = &bad_id.0;
+    let original: String = db
+        .conn
+        .query_row("SELECT data FROM media_node WHERE id=?1", [broken], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    db.conn
+        .execute("UPDATE media_node SET data='{}' WHERE id=?1", [broken])
+        .unwrap();
+    for merged in [false, true] {
+        let read = |scope| {
+            if merged {
+                db.catalog_shelf(scope)
+            } else {
+                db.catalog_season_shelf(scope)
+            }
+        };
+        assert!(db.catalog_shelves(merged).is_err());
+        assert!(read(None).is_err());
+        assert!(read(Some(bad)).is_err());
+        let rows = read(Some(good)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].node.id, good_id);
+    }
+    db.conn
+        .execute(
+            "UPDATE media_node SET data=?1 WHERE id=?2",
+            [&original, broken],
+        )
+        .unwrap();
+    for merged in [false, true] {
+        assert_eq!(db.catalog_shelves(merged).unwrap()[&0].len(), 2);
+    }
+}
+
+#[test]
 fn apply_is_atomic_and_rejects_stale_jobs_and_manual_overrides() {
     let db = Db::in_memory();
     let a = movie(1);

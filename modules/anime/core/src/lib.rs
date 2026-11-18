@@ -70,6 +70,8 @@ pub struct AnimeEngine {
     minute: i64,
     reviews: reviews::Runtime,
     metadata: metadata::Runtime,
+    /// Coalesce writes made while draining one batch of worker replies.
+    catalog_written: bool,
     provider_editor: provider_editor::Editor,
 }
 
@@ -121,6 +123,7 @@ impl AnimeEngine {
             minute: 0,
             reviews: reviews::Runtime::default(),
             metadata: metadata::Runtime::default(),
+            catalog_written: false,
             provider_editor: provider_editor::Editor::default(),
             state: State {
                 signed_in: accounts.signed_in(),
@@ -603,6 +606,9 @@ impl AnimeEngine {
                 Done::RetryMetadata => self.resume_metadata_retry(),
             }
         }
+        if std::mem::take(&mut self.catalog_written) {
+            anime::emit::catalog_changed();
+        }
     }
 
     fn watching_of(&self, id: &str) -> Option<&erika_store::catalog::MediaWatching> {
@@ -856,6 +862,7 @@ impl anime::Commands for AnimeEngine {
                 revision: previous.map_or(0, |w| w.revision),
             })
             .map_err(content::command)?;
+        anime::emit::catalog_changed();
         self.sync_played();
         self.show_opened();
         Ok(())

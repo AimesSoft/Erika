@@ -85,4 +85,4 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Plugins run in Boa where the tests have no system JavaScript host.
 [dev-dependencies]
-bern-script = { git = "https://github.com/AimesSoft/Bern", rev = "5310e26dcb8fbe4ddba0bc218736162ff98926e7", features = ["boa"] }
+bern-script = { git = "https://github.com/AimesSoft/Bern", rev = "514bc2e9881c67eaf30e17450c040bab314c53a0", features = ["boa"] }
