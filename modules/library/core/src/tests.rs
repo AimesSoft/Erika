@@ -1,3 +1,5 @@
+mod browse;
+
 use super::*;
 use erika_library_protocol::library::{Commands, Engine, MatchNote, SourceContent};
 use erika_store::Fingerprint;

@@ -2,7 +2,7 @@
 //! design/next-screens.js): the folders the library scans with the videos
 //! not recognized under them; a folder opened level by level, each video
 //! saying what it was matched to; and matching, one video or a folder's.
-use crate::{LibraryDraft, library_tabs, library_tabs_props};
+use crate::{LibraryDraft, library_phone_header, library_phone_header_props};
 use bern::prelude::*;
 use erika_library_protocol::library::{self, SourceContent};
 use erika_protocol::erika;
@@ -18,6 +18,35 @@ pub fn library_sources_page(app: erika::Client, library: library::Client) -> imp
                     } else if library.browsing {
                         library_folder(library: library)
                     } else {
+                        library_phone_header(app: app, library: library)
+                        Canvas(height: 18)
+                        library_source_list(library: library)
+                    }
+                    Canvas(height: 48)
+                }
+            }
+            if library.shared_prompt {
+                library_shared_mount(app: app, library: library)
+            }
+            if library.remote_prompt {
+                library_remote_mount(app: app, library: library)
+            }
+        }
+    }
+}
+
+#[component]
+pub fn library_sources_content(app: erika::Client, library: library::Client) -> impl View {
+    ui! {
+        Stack {
+            ScrollView {
+                Column(gap: 0, padding_x: if window.tv { 56.0 } else if window.medium { 24.0 } else { 32.0 }, padding_y: 6) {
+                    if library.matching.open {
+                        library_match(app: app, library: library)
+                    } else if library.browsing {
+                        library_folder(library: library)
+                    } else {
+                        Canvas(height: 12)
                         library_source_list(library: library)
                     }
                     Canvas(height: 48)
@@ -46,45 +75,9 @@ pub fn library_hairline() -> impl View {
 /// The sources (`.c-list` of `.c-li`), the videos not recognized, and a
 /// note on how sources add up.
 #[component]
-pub fn library_source_list(library: library::Client, #[session] draft: LibraryDraft) -> impl View {
+pub fn library_source_list(library: library::Client) -> impl View {
     ui! {
         Column(gap: 0) {
-            if window.compact {
-                Canvas(height: 7)
-                Row(gap: 8, height: 48, align: center) {
-                    Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
-                    Spacer
-                    ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
-                        Menu(id: mount_phone, label: tr! { "zh-Hans" => "挂载", "en" => "Mount" }, icon: "plus", style: icon) {
-                            MenuItem(id: mount_local_phone, label: tr! { "zh-Hans" => "本地文件夹", "en" => "Local folder" }, icon: "folder", pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Anime)
-                            MenuItem(id: mount_shared_phone, label: tr! { "zh-Hans" => "NipaPlay共享媒体", "en" => "NipaPlay shared media" }, icon: "server.rack") => library.open_shared_mount()
-                            MenuItem(id: mount_remote_phone, label: tr! { "zh-Hans" => "弹弹play共享媒体", "en" => "dandanplay shared media" }, icon: "server.rack") => library.open_remote_mount()
-                        }
-                        Slot(id: phone_header_settings)
-                    }
-                }
-                Canvas(height: 2)
-                Row(gap: 10, align: center) {
-                    library_tabs()
-                    Spacer
-                }
-            } else {
-                Row(gap: 12, align: center) {
-                    Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
-                    library_tabs()
-                    Spacer
-                    // A television picks no files; its sources come from the
-                    // other devices' library.
-                    if !window.tv {
-                        Menu(id: mount, label: tr! { "zh-Hans" => "挂载", "en" => "Mount" }, icon: "plus", shape: capsule, height: 32) {
-                            MenuItem(id: mount_local, label: tr! { "zh-Hans" => "本地文件夹", "en" => "Local folder" }, icon: "folder", pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Anime)
-                            MenuItem(id: mount_shared, label: tr! { "zh-Hans" => "NipaPlay共享媒体", "en" => "NipaPlay shared media" }, icon: "server.rack") => library.open_shared_mount()
-                            MenuItem(id: mount_remote, label: tr! { "zh-Hans" => "弹弹play共享媒体", "en" => "dandanplay shared media" }, icon: "server.rack") => library.open_remote_mount()
-                        }
-                    }
-                }
-            }
-            Canvas(height: 18)
             if library.has_sources {
                 Stack(variant: row_group) {
                     Column(gap: 0, padding: 4) {

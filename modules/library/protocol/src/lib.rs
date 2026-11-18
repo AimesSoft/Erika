@@ -4,7 +4,7 @@
 //! matched, and matches videos to episodes, one at a time or a folder at a
 //! time, as design/next-screens.js lays it out.
 
-#[bern::protocol(namespace = "library", version = 5)]
+#[bern::protocol(namespace = "library", version = 6)]
 pub mod library {
     use bern::prelude::*;
 
@@ -502,6 +502,9 @@ pub mod library {
         /// Counts the connections saved, which clears the fields typed.
         pub remote_saved: i64,
         pub posters: Vec<LibraryPoster>,
+        /// Changes when the unfiltered wall of any source (or its name) changes.
+        /// Source selection, sort, filter and folder navigation are not inputs.
+        pub browse_revision: i64,
         /// The shows added last, newest first, for the home page, which
         /// shows them only when there are some.
         pub recent: Vec<LibraryPoster>,
@@ -677,7 +680,7 @@ pub mod library {
         fn catalog_job(&self, id: String, answer: Answer<CatalogJob>);
         fn catalog_receipt(&self, request: String, answer: Answer<CatalogReceipt>);
         /// The wall: the shows of source `source`, or of all when it is 0.
-        #[reads(posters)]
+        #[reads(browse_revision)]
         fn browse(
             &self,
             source: i64,

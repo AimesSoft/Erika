@@ -95,6 +95,7 @@ pub struct LibraryEngine {
     /// addresses name no file.
     contents: HashMap<i64, catalog_view::Content>,
     names: HashMap<String, String>,
+    browse_sources: Option<catalog_view::SourceWalls>,
 }
 
 /// Run `work` on another thread, handing what it sends to the engine,
@@ -251,8 +252,14 @@ fn natural(a: &str, b: &str) -> std::cmp::Ordering {
 
 impl Default for LibraryEngine {
     fn default() -> Self {
+        Self::with_db(erika_store::Db::open())
+    }
+}
+
+impl LibraryEngine {
+    fn with_db(db: erika_store::Db) -> Self {
         let mut engine = Self {
-            db: erika_store::Db::open(),
+            db,
             state: State {
                 shared_prompt: false,
                 shared_connecting: false,
@@ -267,6 +274,7 @@ impl Default for LibraryEngine {
                 remote_saved: 0,
                 show: nothing(),
                 posters: Vec::new(),
+                browse_revision: 0,
                 recent: Vec::new(),
                 has_recent: false,
                 opened: String::new(),
@@ -298,50 +306,20 @@ impl Default for LibraryEngine {
             remote_request: 0,
             contents: HashMap::new(),
             names: HashMap::new(),
+            browse_sources: None,
         };
         engine.load();
         engine
     }
-}
 
-impl LibraryEngine {
     fn notify(&mut self, notice: LibraryNotice) {
         self.state.notice = Some(notice);
         self.state.notice_revision += 1;
     }
 
-    /// Everything as the database has it now.
-    fn load(&mut self) {
-        let entries = self.db.entries(None);
-        let merged = catalog_view::merge_seasons(&self.db);
-        let raw_shelf = if merged {
-            self.db.catalog_shelf(None)
-        } else {
-            self.db.catalog_season_shelf(None)
-        };
-        let shelf = match raw_shelf.and_then(|shelf| {
-            self.load_contents(&entries)?;
-            Ok(shelf)
-        }) {
-            Ok(shelf) => shelf,
-            Err(error) => {
-                self.notify(LibraryNotice::Failed {
-                    reason: error.message,
-                });
-                return;
-            }
-        };
-        let images = self.db.catalog_images();
-        self.state.posters = shelf.iter().map(|s| poster(&self.db, s, &images)).collect();
-        let mut added = shelf.clone();
-        added.sort_by(|a, b| b.added.cmp(&a.added));
-        self.state.recent = added
-            .iter()
-            .take(RECENT)
-            .map(|s| poster(&self.db, s, &images))
-            .collect();
-        self.state.has_recent = !self.state.recent.is_empty();
-
+    /// Refresh source management independently of the poster query, including
+    /// while a scan is reporting progress or a wall cannot be read.
+    fn load_sources(&mut self) -> Vec<Source> {
         let sources = self.db.sources();
         self.state.sources = sources
             .iter()
@@ -377,7 +355,23 @@ impl LibraryEngine {
             .collect();
         self.state.has_sources = !sources.is_empty();
         self.state.several_sources = sources.len() > 1;
+        sources
+    }
 
+    /// Reconcile a possible catalog write with the current wall projections.
+    fn load(&mut self) {
+        let sources = self.load_sources();
+        let shelves = self
+            .db
+            .catalog_shelves(catalog_view::merge_seasons(&self.db));
+        self.update_walls(&sources, shelves);
+        let entries = self.db.entries(None);
+        if let Err(error) = self.load_contents(&entries) {
+            self.notify(LibraryNotice::Failed {
+                reason: error.message,
+            });
+            return;
+        }
         let mut unmatched: Vec<LibraryFile> = Vec::new();
         for source in &sources {
             let root = root_of(source);
@@ -405,6 +399,18 @@ impl LibraryEngine {
         self.state.unmatched_count = unmatched.len() as i64;
         self.state.unmatched = unmatched;
 
+        self.update_folder(&sources, &entries);
+        self.update_matching();
+    }
+
+    fn update_matching(&mut self) {
+        self.state.matching = self
+            .session
+            .as_ref()
+            .map_or_else(matching::closed, Session::view);
+    }
+
+    fn update_folder(&mut self, sources: &[Source], entries: &[Entry]) {
         if self
             .at
             .as_ref()
@@ -413,11 +419,24 @@ impl LibraryEngine {
             self.at = None;
         }
         self.state.browsing = self.at.is_some();
-        self.state.folder = self.folder(&sources, &entries);
-        self.state.matching = self
-            .session
+        self.state.folder = self.folder(sources, entries);
+    }
+
+    /// Moving within a source changes the folder view, not the catalogue.
+    fn load_folder(&mut self, sources: &[Source]) {
+        let entries = self
+            .at
             .as_ref()
-            .map_or_else(matching::closed, Session::view);
+            .map(|(id, _)| self.db.entries(Some(*id)))
+            .unwrap_or_default();
+        self.update_folder(sources, &entries);
+    }
+
+    /// Progress, availability and picker replies have no catalog write to compare.
+    fn load_status(&mut self) {
+        let sources = self.load_sources();
+        self.load_folder(&sources);
+        self.update_matching();
     }
 
     /// The folder being browsed: the folders in it with how many videos
@@ -1073,9 +1092,11 @@ impl LibraryEngine {
                 }
             }
         }
-        self.load();
         if changed {
+            self.load();
             library::emit::files_changed();
+        } else {
+            self.load_status();
         }
     }
 
@@ -1160,7 +1181,7 @@ impl LibraryEngine {
         if let Some(session) = self.session.as_mut() {
             change(session);
         }
-        self.load();
+        self.update_matching();
     }
 
     fn listing(
@@ -1169,15 +1190,16 @@ impl LibraryEngine {
         filter: LibraryFilter,
         sort: LibrarySort,
     ) -> erika_store::catalog::Result<LibraryListing> {
-        let images = self.db.catalog_images();
-        let mut posters: Vec<LibraryPoster> = if source == 0 {
+        let mut posters: Vec<LibraryPoster> = if source == 0 && self.browse_sources.is_some() {
             self.state.posters.clone()
         } else {
+            let scope = (source != 0).then_some(source);
             let rows = if catalog_view::merge_seasons(&self.db) {
-                self.db.catalog_shelf(Some(source))?
+                self.db.catalog_shelf(scope)?
             } else {
-                self.db.catalog_season_shelf(Some(source))?
+                self.db.catalog_season_shelf(scope)?
             };
+            let images = self.db.catalog_images();
             rows.iter().map(|s| poster(&self.db, s, &images)).collect()
         };
         let total = posters.len() as i64;
@@ -1597,7 +1619,7 @@ impl library::Commands for LibraryEngine {
         }
         self.announce.insert(source);
         self.start_scan(source);
-        self.load();
+        self.load_status();
         Ok(())
     }
 
@@ -1624,11 +1646,12 @@ impl library::Commands for LibraryEngine {
     }
 
     fn open_source(&mut self, source: i64) -> Result<(), CommandError> {
-        if !self.db.sources().iter().any(|known| known.id == source) {
+        let sources = self.db.sources();
+        if !sources.iter().any(|known| known.id == source) {
             return Err(unknown_source());
         }
         self.at = Some((source, Vec::new()));
-        self.load();
+        self.load_folder(&sources);
         Ok(())
     }
 
@@ -1636,7 +1659,7 @@ impl library::Commands for LibraryEngine {
         if let Some((_, path)) = self.at.as_mut() {
             path.push(name);
         }
-        self.load();
+        self.load_folder(&self.db.sources());
         Ok(())
     }
 
@@ -1647,7 +1670,7 @@ impl library::Commands for LibraryEngine {
             }
             _ => self.at = None,
         }
-        self.load();
+        self.load_folder(&self.db.sources());
         Ok(())
     }
 
@@ -1655,14 +1678,15 @@ impl library::Commands for LibraryEngine {
         if let Some((_, path)) = self.at.as_mut() {
             path.truncate(depth.max(0) as usize);
         }
-        self.load();
+        self.load_folder(&self.db.sources());
         Ok(())
     }
 
     fn close_source(&mut self) -> Result<(), CommandError> {
         self.at = None;
         self.session = None;
-        self.load();
+        self.update_folder(&[], &[]);
+        self.update_matching();
         Ok(())
     }
 
@@ -1694,7 +1718,7 @@ impl library::Commands for LibraryEngine {
         let words = names::search_words(&video.name);
         let session = Session::one(video, place);
         self.begin(session, words);
-        self.load();
+        self.update_matching();
         Ok(())
     }
 
@@ -1732,25 +1756,25 @@ impl library::Commands for LibraryEngine {
         let words = names::search_words(&self.state.folder.title);
         let session = Session::folder(videos, place);
         self.begin(session, words);
-        self.load();
+        self.update_matching();
         Ok(())
     }
 
     fn match_search(&mut self, text: String) -> Result<(), CommandError> {
         self.search(text);
-        self.load();
+        self.update_matching();
         Ok(())
     }
 
     fn match_work(&mut self, id: String) -> Result<(), CommandError> {
         self.choose_work(id)?;
-        self.load();
+        self.update_matching();
         Ok(())
     }
 
     fn match_season(&mut self, id: String) -> Result<(), CommandError> {
         self.choose_season(id)?;
-        self.load();
+        self.update_matching();
         Ok(())
     }
 
@@ -1823,7 +1847,7 @@ impl library::Commands for LibraryEngine {
 
     fn match_cancel(&mut self) -> Result<(), CommandError> {
         self.session = None;
-        self.load();
+        self.update_matching();
         Ok(())
     }
 }

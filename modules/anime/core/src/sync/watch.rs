@@ -77,6 +77,7 @@ impl AnimeEngine {
             }
         }
         if changed {
+            self.catalog_written = true;
             // The other enabled account need not wait for another file to play.
             // The source account's own outbox preflight observes the value and
             // finishes without issuing a redundant write.

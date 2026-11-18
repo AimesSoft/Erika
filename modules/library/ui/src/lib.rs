@@ -2,10 +2,10 @@
 //! of shows (番剧) and the sources (来源), where folders are added,
 //! browsed, and their videos matched.
 use bern::prelude::*;
-use erika_library_protocol::library::{self, LibraryFilter, LibrarySort};
+use erika_library_protocol::library::{self, LibraryFilter, LibrarySort, SourceContent};
 use erika_protocol::erika;
 mod sources;
-use sources::{library_sources_page, library_sources_page_props};
+use sources::{library_sources_content, library_sources_content_props, library_sources_page, library_sources_page_props};
 
 #[bern::value]
 pub enum LibraryTab {
@@ -65,57 +65,84 @@ pub fn library_page(
         if (!build.modules.anime || !app.modules.anime) && library.opened != "" {
             library_preview(library: library)
         } else {
-            if draft.tab == LibraryTab::Sources {
-                library_sources_page(app: app, library: library)
-            } else {
-            Query(id: catalog, query: library.browse(if library.several_sources { draft.source } else { 0 }, draft.filter, draft.sort)) |listing| {
-                if window.compact {
-                    library_phone(app: app, library: library, listing: listing)
-                } else {
-                Column(gap: 0, padding_y: 6, appear: page_in) {
+            Column(gap: 0, padding_y: if window.compact { 0.0 } else { 6.0 }, appear: page_in) {
+                if !window.compact && !(draft.tab == LibraryTab::Sources && (library.matching.open || library.browsing)) {
                     Column(gap: 0, padding_x: if window.tv { 56.0 } else if window.medium { 24.0 } else { 32.0 }) {
-                        Adaptive {
-                            Layout(size: expanded) {
-                                Row(gap: 12, align: center) {
-                                    Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
-                                    library_tabs()
-                                    Spacer
-                                    library_zoom(app: app)
-                                    library_sort()
-                                }
-                            }
-                            Layout(size: compact) {
-                                Column(gap: 12) {
-                                    Row(gap: 12, align: center) {
-                                        Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
-                                        Spacer
-                                        library_sort()
-                                    }
-                                    Row(gap: 12, align: center) {
-                                        library_tabs()
-                                        Spacer
-                                        library_zoom(app: app)
-                                    }
-                                }
-                            }
-                        }
-                        Canvas(height: 14)
-                        Row(gap: 8, align: center) {
-                            ForEach(items: listing.filters, key: id) |chip| {
-                                library_filter(value: chip.value, count: chip.count)
-                            }
+                        Row(gap: 12, align: center) {
+                            Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
+                            library_tabs()
                             Spacer
-                            library_source_chips(library: library)
+                            if draft.tab == LibraryTab::Sources {
+                                if !window.tv {
+                                    Menu(id: mount, label: tr! { "zh-Hans" => "挂载", "en" => "Mount" }, icon: "plus", shape: capsule, height: 32) {
+                                        MenuItem(id: mount_local, label: tr! { "zh-Hans" => "本地文件夹", "en" => "Local folder" }, icon: "folder", pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Anime)
+                                        MenuItem(id: mount_shared, label: tr! { "zh-Hans" => "NipaPlay共享媒体", "en" => "NipaPlay shared media" }, icon: "server.rack") => library.open_shared_mount()
+                                        MenuItem(id: mount_remote, label: tr! { "zh-Hans" => "弹弹play共享媒体", "en" => "dandanplay shared media" }, icon: "server.rack") => library.open_remote_mount()
+                                    }
+                                }
+                            } else {
+                                library_zoom(app: app)
+                                library_sort()
+                            }
                         }
                     }
-                    library_wall(app: app, library: library, listing: listing)
                 }
+                Stack(align: top_leading) {
+                    // The body owns the room below the header, even when a cold
+                    // catalog has just a progress row. Don't split that room
+                    // between a spacer and the poster scroll view in a column.
+                    Column(gap: 0) { Spacer }
+                    // The page owns one subscription. Neither its width nor the
+                    // selected tab is part of the query's identity.
+                    Query(id: catalog, query: library.browse(if library.several_sources { draft.source } else { 0 }, draft.filter, draft.sort), presented: draft.tab == LibraryTab::Shows) |listing| {
+                        QueryStatusHeader {
+                            if window.compact {
+                                Column(gap: 0, padding_x: 16) {
+                                    library_phone_header(app: app, library: library)
+                                }
+                            }
+                        }
+                        if window.compact {
+                            library_phone(app: app, library: library, listing: listing)
+                        } else {
+                            library_shows_content(app: app, library: library, listing: listing)
+                        }
+                    }
+                    if draft.tab == LibraryTab::Sources {
+                        if window.compact {
+                            library_sources_page(app: app, library: library)
+                        } else {
+                            library_sources_content(app: app, library: library)
+                        }
+                    }
                 }
-            }
             }
             if let Some(notice) = library.notice {
                 Toast(content: notice, key: library.notice_revision, duration: 3)
             }
+        }
+    }
+}
+
+#[component]
+pub fn library_shows_content(
+    app: erika::Client,
+    library: library::Client,
+    listing: library::LibraryListing,
+) -> impl View {
+    ui! {
+        Column(gap: 0) {
+            Column(gap: 0, padding_x: if window.tv { 56.0 } else if window.medium { 24.0 } else { 32.0 }) {
+                Canvas(height: 14)
+                Row(gap: 8, align: center) {
+                    ForEach(items: listing.filters, key: id) |chip| {
+                        library_filter(value: chip.value, count: chip.count)
+                    }
+                    Spacer
+                    library_source_chips(library: library)
+                }
+            }
+            library_wall(app: app, library: library, listing: listing)
         }
     }
 }
@@ -174,11 +201,8 @@ pub fn library_wall(
     }
 }
 
-/// The phone's library (`libHTML(true)`): one page scrolling as a whole,
-/// its header row (`.x-pnav`: the large title, the source filter when there
-/// are several sources, and the sort as a 34-point round button), the tabs
-/// and the zoom 2 points under it, the filters 12 under those and the wall
-/// 18 under them.
+/// The phone's shows page (`libHTML(true)`): title and actions, tabs and
+/// zoom, filters and posters share a viewport; the letter index does not.
 #[component]
 pub fn library_phone(
     app: erika::Client,
@@ -193,12 +217,13 @@ pub fn library_phone(
     }
 }
 
-/// The phone's heading stays in the poster scroll view.
+/// Shared by the compact shows and sources pages; navigation and actions
+/// depend on the selected tab, not on a catalog response.
 #[component]
 pub fn library_phone_header(
     app: erika::Client,
     library: library::Client,
-    listing: library::LibraryListing,
+    #[session] draft: LibraryDraft,
 ) -> impl View {
     ui! {
         Column(gap: 0) {
@@ -207,7 +232,15 @@ pub fn library_phone_header(
                 Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
                 Spacer
                 ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
-                    library_sort_round()
+                    if draft.tab == LibraryTab::Sources {
+                        Menu(id: mount_phone, label: tr! { "zh-Hans" => "挂载", "en" => "Mount" }, icon: "plus", style: icon) {
+                            MenuItem(id: mount_local_phone, label: tr! { "zh-Hans" => "本地文件夹", "en" => "Local folder" }, icon: "folder", pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Anime)
+                            MenuItem(id: mount_shared_phone, label: tr! { "zh-Hans" => "NipaPlay共享媒体", "en" => "NipaPlay shared media" }, icon: "server.rack") => library.open_shared_mount()
+                            MenuItem(id: mount_remote_phone, label: tr! { "zh-Hans" => "弹弹play共享媒体", "en" => "dandanplay shared media" }, icon: "server.rack") => library.open_remote_mount()
+                        }
+                    } else {
+                        library_sort_round()
+                    }
                     Slot(id: phone_header_settings)
                 }
             }
@@ -215,10 +248,20 @@ pub fn library_phone_header(
             Row(gap: 10, align: center) {
                 library_tabs()
                 Spacer
-                library_zoom(app: app)
+                if draft.tab == LibraryTab::Shows {
+                    library_zoom(app: app)
+                }
             }
+        }
+    }
+}
+
+/// Filters depend on the scoped wall; the navigation above them does not.
+#[component]
+pub fn library_phone_filters(library: library::Client, listing: library::LibraryListing) -> impl View {
+    ui! {
+        Column(gap: 0) {
             Canvas(height: 12)
-            // `.l-chips` on the phone stay one line.
             ScrollView(axis: horizontal, indicators: mouse) {
                 Row(gap: 8, align: center) {
                     ForEach(items: listing.filters, key: id) |chip| {
@@ -232,10 +275,9 @@ pub fn library_phone_header(
     }
 }
 
-/// The wall and the letters beside it (`.l-wrap`, 28 points for the
-/// letters, 22 on the phone). Only the posters scroll; the index is a
-/// sibling of that viewport. Keep the keyed ForEach in the same component
-/// as its position-bound ScrollView so native targets register its items.
+/// The letter index is a sibling of the poster viewport, not part of its
+/// scrolling content. Keep the keyed ForEach in the same component as its
+/// position-bound ScrollView so native targets register its items.
 #[component]
 pub fn library_grid(
     app: erika::Client,
@@ -248,12 +290,13 @@ pub fn library_grid(
 ) -> impl View {
     ui! {
         Row(gap: 0.0, align: top) {
-            ScrollView(position: draft.position, arrival: nudge, appear: page_in) {
+            ScrollView(position: draft.position, arrival: nudge) {
                 Row(gap: 0.0, align: top) {
                     Canvas(width: if window.tv { 56.0 } else if window.compact { 16.0 } else if window.medium { 24.0 } else { 32.0 })
                     Column(gap: 0) {
                         if window.compact {
-                            library_phone_header(app: app, library: library, listing: listing)
+                            library_phone_header(app: app, library: library)
+                            library_phone_filters(library: library, listing: listing)
                         } else {
                             Canvas(height: 18)
                         }

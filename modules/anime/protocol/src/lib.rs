@@ -2,7 +2,7 @@
 //! and timeline, and the show whose details are open. Asking to play goes
 //! out as the `play` event, which the shell's player answers.
 
-#[bern::protocol(namespace = "anime", version = 4)]
+#[bern::protocol(namespace = "anime", version = 5)]
 pub mod anime {
     use bern::media::MediaSource;
     use bern::prelude::*;
@@ -524,6 +524,10 @@ pub mod anime {
 
     #[events]
     pub trait Events {
+        /// Committed metadata, source mappings or watched marks may affect other
+        /// catalogue views. Carries no page selection or account data.
+        fn catalog_changed(&self);
+
         /// Play an exact file position in seconds. Empty media means file-only
         /// resume (a collection whose active item cannot be established).
         fn play_media(&self, media: String, source: MediaSource, position: f64, from_stage: bool);

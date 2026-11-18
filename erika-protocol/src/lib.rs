@@ -1360,6 +1360,12 @@ pub mod erika {
         #[on(library::open_show)]
         fn open_library_show(&mut self, id: String, home: bool) -> Result<(), CommandError>;
 
+        /// Details saved metadata, a provider mapping or watch state. Let the
+        /// optional library compare its own wall; do not send this back to anime.
+        #[cfg(feature = "bern-module-anime")]
+        #[on(anime::catalog_changed)]
+        fn anime_catalog_changed(&mut self) -> Result<(), CommandError>;
+
         /// The library matched or removed videos: the anime pages show the
         /// files anew.
         #[cfg(feature = "bern-module-library")]

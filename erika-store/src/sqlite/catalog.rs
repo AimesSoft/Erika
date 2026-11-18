@@ -2,8 +2,8 @@
 //! transaction; validation errors and stale revisions roll back the whole edit.
 use super::Db;
 use crate::catalog::{
-    BindingChange, Error, MediaFile, MediaMark, MediaShelf, MediaWatching, Result,
-    fold_season_shelf,
+    BindingChange, Error, MediaFile, MediaMark, MediaShelf, MediaShelves, MediaWatching, Result,
+    fold_shelves,
 };
 use erika_catalog::{
     BindingItem, DanmakuBinding, Decision, FileBinding, Kind, MediaId, MediaNode, Provider,
@@ -833,50 +833,82 @@ impl Db {
             .collect())
     }
     pub fn catalog_shelf(&self, source: Option<i64>) -> Result<Vec<MediaShelf>> {
-        let mut stmt = self.conn.prepare("SELECT root.data,count(DISTINCT n.id),count(DISTINCT CASE WHEN w.watched=1 THEN n.id END),min(ad.seen_at),max(ad.seen_at) FROM media_node root JOIN media_node n ON n.root_id=root.id JOIN file_binding_item bi ON bi.media_id=n.id JOIN address ad ON ad.file_id=bi.file_id LEFT JOIN media_watched w ON w.media_id=n.id WHERE root.parent_id IS NULL AND (?1 IS NULL OR ad.source_id=?1) GROUP BY root.id ORDER BY max(ad.seen_at) DESC,root.id")?;
-        stmt.query_map([source], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get(1)?,
-                r.get(2)?,
-                r.get(3)?,
-                r.get(4)?,
-            ))
-        })?
-        .map(|row| {
-            let (data, episodes, watched, added, seen) = row?;
-            Ok(MediaShelf {
-                node: decode(data)?,
-                episodes,
-                watched,
-                added,
-                seen,
-            })
-        })
-        .collect()
+        Ok(self
+            .root_shelves(source, false)?
+            .remove(&0)
+            .unwrap_or_default())
     }
+
+    fn root_shelves(&self, source: Option<i64>, by_source: bool) -> Result<MediaShelves> {
+        // Count DISTINCT items within each scope, not the sum of source counts:
+        // a file can live in two sources. Only fan out when all scopes are wanted.
+        let mut stmt = self.conn.prepare(
+            "SELECT CASE WHEN scopes.scoped THEN ad.source_id ELSE 0 END AS scope,
+                    root.data, count(DISTINCT n.id),
+                    count(DISTINCT CASE WHEN w.watched=1 THEN n.id END),
+                    min(ad.seen_at), max(ad.seen_at)
+             FROM media_node root JOIN media_node n ON n.root_id=root.id
+             JOIN file_binding_item bi ON bi.media_id=n.id JOIN address ad ON ad.file_id=bi.file_id
+             LEFT JOIN media_watched w ON w.media_id=n.id
+             CROSS JOIN (SELECT 0 AS scoped UNION ALL SELECT 1 WHERE ?2) scopes
+             WHERE root.parent_id IS NULL AND (?1 IS NULL OR ad.source_id=?1)
+             GROUP BY scope, root.id ORDER BY scope, max(ad.seen_at) DESC, root.id",
+        )?;
+        let mut shelves = MediaShelves::from([(0, Vec::new())]);
+        let mut rows = stmt.query(params![source, by_source])?;
+        while let Some(row) = rows.next()? {
+            shelves.entry(row.get(0)?).or_default().push(MediaShelf {
+                node: decode(row.get(1)?)?,
+                episodes: row.get(2)?,
+                watched: row.get(3)?,
+                added: row.get(4)?,
+                seen: row.get(5)?,
+            });
+        }
+        Ok(shelves)
+    }
+
     /// Per-season shelf entries: movies stay grouped by movie node, regular TV
     /// seasons (`season_number >= 1`) become independent entries, and `Season 0`
     /// specials fold into the work's first bound regular season (or the work
     /// root when only specials exist).
     pub fn catalog_season_shelf(&self, source: Option<i64>) -> Result<Vec<MediaShelf>> {
-        let mut stmt = self.conn.prepare("SELECT root.data,parent.data,n.id,coalesce(w.watched,0),ad.seen_at FROM media_node n JOIN media_node root ON root.id=n.root_id LEFT JOIN media_node parent ON parent.id=n.parent_id JOIN file_binding_item bi ON bi.media_id=n.id JOIN address ad ON ad.file_id=bi.file_id LEFT JOIN media_watched w ON w.media_id=n.id WHERE (?1 IS NULL OR ad.source_id=?1)")?;
-        let mut raw = Vec::new();
-        for row in stmt.query_map([source], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, i64>(3)? != 0,
-                r.get::<_, i64>(4)?,
-            ))
-        })? {
-            let (root_json, parent_json, item_id, watched, seen) = row?;
-            let root: MediaNode = decode(root_json)?;
-            let parent: Option<MediaNode> = parent_json.map(decode).transpose()?;
-            raw.push((root, parent, MediaId(item_id), watched, seen));
+        Ok(self
+            .season_shelves(source, false)?
+            .remove(&0)
+            .unwrap_or_default())
+    }
+
+    fn season_shelves(&self, source: Option<i64>, by_source: bool) -> Result<MediaShelves> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ad.source_id, root.data, parent.data, n.id, coalesce(w.watched,0), ad.seen_at
+             FROM media_node n JOIN media_node root ON root.id=n.root_id
+             LEFT JOIN media_node parent ON parent.id=n.parent_id
+             JOIN file_binding_item bi ON bi.media_id=n.id JOIN address ad ON ad.file_id=bi.file_id
+             LEFT JOIN media_watched w ON w.media_id=n.id WHERE (?1 IS NULL OR ad.source_id=?1)",
+        )?;
+        let mut groups = std::collections::BTreeMap::<_, Vec<_>>::new();
+        let mut rows = stmt.query([source])?;
+        while let Some(row) = rows.next()? {
+            let scope = if by_source { row.get(0)? } else { 0 };
+            groups.entry(scope).or_default().push((
+                decode(row.get(1)?)?,
+                row.get::<_, Option<String>>(2)?.map(decode).transpose()?,
+                MediaId(row.get(3)?),
+                row.get(4)?,
+                row.get(5)?,
+            ));
         }
-        Ok(fold_season_shelf(raw))
+        Ok(fold_shelves(groups, by_source))
+    }
+
+    /// Read the whole and each source's wall from the same database snapshot.
+    pub fn catalog_shelves(&self, merged: bool) -> Result<MediaShelves> {
+        if merged {
+            self.root_shelves(None, true)
+        } else {
+            self.season_shelves(None, true)
+        }
     }
     pub fn catalog_watching(&self, limit: usize) -> Result<Vec<MediaWatching>> {
         let mut stmt = self.conn.prepare("SELECT ad.file_id,r.path,r.still,coalesce(p.position,r.position),coalesce(p.duration,r.duration) FROM recent r JOIN address ad ON ad.source_id=r.source_id AND ad.path=r.path JOIN file_binding b ON b.file_id=ad.file_id LEFT JOIN progress p ON p.file_id=ad.file_id ORDER BY r.played_at DESC,r.path")?;

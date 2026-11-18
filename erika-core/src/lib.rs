@@ -969,6 +969,13 @@ impl erika::Commands for ErikaEngine {
         Ok(())
     }
 
+    #[cfg(feature = "bern-module-anime")]
+    fn anime_catalog_changed(&mut self) -> Result<(), CommandError> {
+        #[cfg(feature = "bern-module-library")]
+        erika_library_protocol::library::calls::history_changed();
+        Ok(())
+    }
+
     #[cfg(feature = "bern-module-library")]
     fn library_files_changed(&mut self) -> Result<(), CommandError> {
         #[cfg(feature = "bern-module-anime")]

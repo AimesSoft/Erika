@@ -93,6 +93,35 @@ macro_rules! contract {
             assert!(seen.iter().find(|s| s.url==files[0].url).unwrap().matched);
         }
         #[test]
+        fn batched_shelves_match_individual_scopes_and_do_not_count_copies_twice() {
+            let db = Db::in_memory();
+            for merged in [true, false] {
+                assert!(db.catalog_shelves(merged).unwrap()[&0].is_empty());
+            }
+            let (a, files) = source_files(&db);
+            let b = db.add_source("folder", "Copy", "file:///copy", "anime").unwrap();
+            let film = movie(12);
+            let second = movie(13);
+            db.catalog_apply(&[film.clone(), second.clone()], &[], &[
+                binding(files[0].file, &film, 0, Decision::Manual),
+                binding(files[1].file, &second, 0, Decision::Manual),
+            ], &[]).unwrap();
+            let copied = db.saw(b, "file:///copy/a.mkv", 100, 1,
+                Some(&crate::Fingerprint { md5: "a".repeat(32), size: 100 })).unwrap();
+            assert!(files.iter().any(|f| f.file == copied));
+            for merged in [true, false] {
+                let shelves = db.catalog_shelves(merged).unwrap();
+                assert_eq!(shelves[&0].len(), 2);
+                assert!(shelves[&0].iter().all(|s| s.episodes == 1));
+                assert_eq!(shelves[&a].len(), 2);
+                assert_eq!(shelves[&b].len(), 1);
+                for (key, scope) in [(0, None), (a, Some(a)), (b, Some(b))] {
+                    let expected = if merged { db.catalog_shelf(scope) } else { db.catalog_season_shelf(scope) };
+                    assert_eq!(shelves[&key], expected.unwrap());
+                }
+            }
+        }
+        #[test]
         fn selection_requires_every_address_and_keeps_danmaku_and_resume() {
             let db=Db::in_memory();let (_,a)=source_files(&db);let n=movie(80);
             let bindings:Vec<_>=a.iter().map(|a|binding(a.file,&n,0,Decision::Manual)).collect();
