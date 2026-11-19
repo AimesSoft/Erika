@@ -53,7 +53,7 @@ pub fn player(
             } else if window.short || window.compact || window.medium {
                 Stack(under_bars: true, variant: player_black) {
                     ScaleBox(width: 844, height: 390) {
-                        player_scene(app: app, players: players, windows: windows, shown: (if window.touch { !draft.touch_hidden } else { !window.idle || app.paused }) || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
+                        player_scene(app: app, players: players, windows: windows, shown: (if window.touch { !draft.touch_hidden } else { !window.idle }) || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
                     }
                 }
             } else {
@@ -61,9 +61,46 @@ pub fn player(
                 // bars only once a frame that flew in has landed
                 // (`arriving`), and the picture must not move then.
                 Stack(under_bars: true, variant: player_black) {
-                    ScaleBox(width: 1280, height: 800) {
-                        player_scene(app: app, players: players, windows: windows, shown: (if window.touch { !draft.touch_hidden } else { !window.idle || app.paused }) || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
-                    }
+                    Button(id: picture, label: tr! { "zh-Hans" => "播放或暂停画面", "en" => "Play or pause picture" }, variant: player_picture, idle_area: 1) {
+                        player_picture_content(app: app, players: players)
+                        ContextMenu {
+                            MenuItem(
+                                id: ctx_play_pause,
+                                label: tr! { "zh-Hans" => "播放 / 暂停", "en" => "Play / Pause" },
+                                icon: "play.fill",
+                                shortcut: app.keys.play_pause
+                            ) => app.toggle_pause()
+                            MenuItem(id: ctx_seek_back, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }, icon: "gobackward.10", shortcut: app.keys.seek_back) => app.skip(-10.0)
+                            MenuItem(id: ctx_seek_forward, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }, icon: "goforward.10", shortcut: app.keys.seek_forward) => app.skip(10.0)
+                            MenuItem(id: ctx_prev, label: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, icon: "backward.end.fill", enabled: app.player.has_previous, shortcut: app.keys.previous_episode) => app.change_episode(-1)
+                            MenuItem(id: ctx_next, label: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, icon: "forward.end.fill", enabled: app.player.has_next, shortcut: app.keys.next_episode) => app.change_episode(1)
+                            Divider
+                            MenuItem(
+                                id: ctx_danmaku,
+                                label: tr! { "zh-Hans" => "显示 / 隐藏弹幕", "en" => "Toggle danmaku" },
+                                icon: "text.bubble",
+                                enabled: build.modules.danmaku && app.features.danmaku,
+                                shortcut: app.keys.toggle_danmaku
+                            ) => app.set_preference("show_danmaku", !app.preferences.show_danmaku)
+                            MenuItem(id: ctx_screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: app.keys.screenshot) => app.screenshot()
+                            MenuItem(
+                                id: ctx_fullscreen,
+                                label: tr! { "zh-Hans" => "切换全屏", "en" => "Toggle full screen" },
+                                icon: "viewfinder",
+                                shortcut: app.keys.fullscreen
+                            ) => windows.main.toggle_fullscreen()
+                            Divider
+                            MenuItem(id: ctx_settings, label: tr! { "zh-Hans" => "播放设置…", "en" => "Playback settings…" }, icon: "slider.horizontal.3") => app.player_panel(true)
+                            MenuItem(
+                                id: ctx_minimize,
+                                label: tr! { "zh-Hans" => "收起播放器", "en" => "Minimize player" },
+                                icon: "chevron.down",
+                                enabled: (build.modules.anime && app.features.anime) || (build.modules.library && app.features.library) || (build.modules.downloads && app.features.downloads)
+                            ) => app.minimize()
+                            MenuItem(id: ctx_close, label: tr! { "zh-Hans" => "停止播放", "en" => "Stop playback" }, icon: "xmark") => app.close_player()
+                        }
+                    } => app.toggle_pause()
+                    player_desktop_hud(app: app, windows: windows, shown: !window.idle || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
                 }
             }
             if let Some(notice) = app.notice {
@@ -102,7 +139,7 @@ pub fn player_scene(
             }
             if shown {
                 Positioned(x: if window.short || window.compact || window.medium { 12 } else { 35 }, y: if window.short || window.compact || window.medium { 6 } else { 22 }, width: if window.short || window.compact || window.medium { 820 } else { 1210 }, height: 64, appear: top_bar_in, disappear: top_bar_out) {
-                    player_top(app: app)
+                    player_top(app: app, desktop: false)
                 }
                 Positioned(x: if window.short || window.compact || window.medium { 80 } else { 103 }, y: if window.short || window.compact || window.medium { 258.125 } else { 668.125 }, width: if window.short || window.compact || window.medium { 684 } else { 1074 }, height: 60, animate: hero, appear: controls_in, disappear: controls_out) {
                     player_timeline(app: app, width: if window.short || window.compact || window.medium { 684.0 } else { 1074.0 }, end: if window.short || window.compact || window.medium { 698.0 } else { 1088.0 })
@@ -114,6 +151,39 @@ pub fn player_scene(
             if app.player.skip_kind != SkipKind::None {
                 Positioned(x: if window.short || window.compact || window.medium { 521 } else { 957 }, y: if window.short || window.compact || window.medium { 198 } else { 608 }, width: 220, height: 40) {
                     player_skip_button(app: app)
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn player_desktop_hud(
+    app: erika::Client,
+    windows: AppWindows,
+    shown: bool,
+) -> impl View {
+    ui! {
+        Column(gap: 0) {
+            if shown {
+                Column(gap: 0, padding_x: 12, appear: top_bar_in, disappear: top_bar_out) {
+                    Canvas(height: 8)
+                    player_top(app: app, desktop: true)
+                }
+            }
+            Spacer
+            if app.player.skip_kind != SkipKind::None {
+                Row(padding_x: 20) {
+                    Spacer
+                    player_skip_button(app: app)
+                }
+                Canvas(height: 12)
+            }
+            if shown {
+                Column(gap: 4, padding_x: 20, appear: controls_in, disappear: controls_out) {
+                    player_desktop_timeline(app: app)
+                    player_controls(app: app, windows: windows)
+                    Canvas(height: 10)
                 }
             }
         }
@@ -244,7 +314,7 @@ pub fn player_tabletop(
                 Stack(width: 720, height: 300, align: top_leading) {
                     if !window.touch || !draft.touch_hidden || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open {
                         Positioned(x: 12, y: 6, width: 696, height: 64) {
-                            player_top(app: app)
+                            player_top(app: app, desktop: false)
                         }
                         Positioned(x: 80, y: 128, width: 560, height: 60) {
                             player_timeline(app: app, width: 560.0, end: 574.0)
@@ -464,9 +534,9 @@ pub fn player_overlays(app: erika::Client) -> impl View {
 }
 
 #[component]
-pub fn player_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+pub fn player_top(app: erika::Client, desktop: bool, #[session] draft: PlayerDraft) -> impl View {
     ui! {
-        Row(gap: 12, height: 64, align: center) {
+        Row(gap: 0, height: if desktop { 36 } else { 64 }, align: center) {
             if draft.tracks_open {
                 Shortcut(key: app.keys.back) => draft.tracks_open.set(false)
             } else if draft.rate_open {
@@ -484,28 +554,33 @@ pub fn player_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl Vie
             } else {
                 Shortcut(key: app.keys.back) => app.minimize()
             }
-            Stack(variant: player_buttons) {
-                ControlGroup(height: 40) {
-                    // With no sidebar to shrink into, the picture goes back into
-                    // the empty frame (design 10.2).
-                    if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
-                        IconButton(id: back_to_frame, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }) => app.return_to_frame()
-                    } else {
-                        IconButton(id: back, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }) => app.minimize()
+            if desktop && !window.fullscreen {
+                WindowButtons
+            }
+            Row(gap: 12, align: center) {
+                Stack(variant: player_buttons) {
+                    ControlGroup(height: if desktop { 36 } else { 40 }) {
+                        // With no sidebar to shrink into, the picture goes back into
+                        // the empty frame (design 10.2).
+                        if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
+                            IconButton(id: back_to_frame, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }) => app.return_to_frame()
+                        } else {
+                            IconButton(id: back, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }) => app.minimize()
+                        }
+                    }
+                }
+                Stack(variant: player_overlay) {
+                    Column(gap: 1, padding_x: 4) {
+                        Stack(variant: player_text) { Text(content: app.title, style: title3, lines: 1) }
+                        Stack(variant: player_secondary) { Text(content: app.subtitle, style: caption) }
                     }
                 }
             }
-            Stack(variant: player_overlay) {
-                Column(gap: 2, padding_x: 4) {
-                    Stack(variant: player_text) { Text(content: app.title, style: title3, lines: 1) }
-                    Stack(variant: player_secondary) { Text(content: app.subtitle, style: caption) }
-                }
-            }
             Spacer
-            Row(variant: player_groups, align: center) {
-                Stack(variant: player_buttons) {
-                    ControlGroup(label: tr! { "zh-Hans" => "音量与弹幕", "en" => "Audio and danmaku" }, height: 40) {
-                        PopoverButton(panel_appearance: surface, id: volume, icon: "speaker.wave.2", label: tr! { "zh-Hans" => "音量", "en" => "Volume" }, presented: draft.volume_open) {
+            Stack(variant: player_buttons) {
+                ControlGroup(label: tr! { "zh-Hans" => "播放器工具", "en" => "Player tools" }, height: if desktop { 36 } else { 40 }) {
+                    PopoverButton(id: volume, icon: "speaker.wave.2", label: tr! { "zh-Hans" => "音量", "en" => "Volume" }, presented: draft.volume_open) {
+                        Stack(appearance: dark, tint: text.primary) {
                             Column(gap: 12, width: 240, padding: 8) {
                                 Row(align: center) {
                                     Text(content: tr! { "zh-Hans" => "音量", "en" => "Volume" }) Spacer
@@ -514,17 +589,62 @@ pub fn player_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl Vie
                                 Slider(id: volume_level, label: tr! { "zh-Hans" => "音量", "en" => "Volume" }, label_hidden: true, current: app.player.volume, continuous: true, min: 0, max: 1) => app.set_player_number("volume", app.player.volume)
                             }
                         }
-                        if (build.modules.danmaku && app.features.danmaku) {
-                            PopoverButton(panel_appearance: surface, id: match_danmaku, icon: "link", label: tr! { "zh-Hans" => "弹幕匹配", "en" => "Match danmaku" }, open: app.matching.open) { player_matching(app: app) } => app.show_matching(app.matching.open)
+                    }
+                    if (build.modules.danmaku && app.features.danmaku) {
+                        PopoverButton(id: match_danmaku, icon: "link", label: tr! { "zh-Hans" => "弹幕匹配", "en" => "Match danmaku" }, open: app.matching.open) {
+                            Stack(appearance: dark, tint: text.primary) { player_matching(app: app) }
+                        } => app.show_matching(app.matching.open)
+                    }
+                    PopoverButton(id: settings, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }, open: app.player.panel) {
+                        Stack(appearance: dark, tint: text.primary) { player_panel(app: app) }
+                    } => app.player_panel(app.player.panel)
+                    IconButton(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: app.keys.screenshot) => app.screenshot()
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn player_desktop_timeline(app: erika::Client) -> impl View {
+    ui! {
+        Stack(variant: player_overlay) {
+            Column(gap: 2) {
+                Row(gap: 10, align: center) {
+                    Stack(variant: player_text) {
+                        Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2)
+                    }
+                    Stack(align: center) {
+                        Slider(id: position, appearance: dark, tint: text.primary, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }, label_hidden: true, current: app.progress, min: 0, max: 1) => app.seek(app.progress)
+                        if app.player.has_chapters && app.duration > 0.0 {
+                            Rail {
+                                ForEach(items: app.player.chapters, key: id) |chapter| {
+                                    Canvas(at: chapter.at, width: 2, height: 4) { Shape(kind: rect, fill: text.primary) }
+                                }
+                            }
                         }
                     }
+                    Stack(variant: player_secondary) {
+                        Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2)
+                    }
                 }
-                Stack(variant: player_buttons) {
-                    ControlGroup(label: tr! { "zh-Hans" => "播放选项", "en" => "Playback options" }, height: 40) {
-                        PopoverButton(panel_appearance: surface, id: settings, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }, open: app.player.panel) {
-                            player_panel(app: app)
-                        } => app.player_panel(app.player.panel)
-                        IconButton(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: app.keys.screenshot) => app.screenshot()
+                if app.player.has_chapters && app.duration > 0.0 {
+                    Row(gap: 10, align: center) {
+                        Canvas(width: 40, height: 1)
+                        Stack(height: 20) {
+                            Rail(anchor: start) {
+                                ForEach(items: app.player.chapters, key: id) |chapter| {
+                                    if chapter.label_width >= 24.0 {
+                                        Stack(at: chapter.at, width: chapter.label_width, height: 20, align: leading) {
+                                            Button(id: chapter, label: chapter.title, variant: player_picture) {
+                                                Stack(variant: player_text) { Text(content: chapter.title, style: caption, lines: 1) }
+                                            } => app.seek_chapter(chapter.id)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Canvas(width: 40, height: 1)
                     }
                 }
             }
@@ -590,11 +710,11 @@ pub fn player_controls(
             if (build.modules.danmaku && app.features.danmaku) {
                 Stack(variant: player_buttons) {
                     ControlGroup(height: 40) {
-                        PopoverButton(panel_appearance: surface, id: danmaku, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, icon: "text.bubble", presented: draft.danmaku_open) {
-                            player_danmaku_quick(app: app)
+                        PopoverButton(id: danmaku, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, icon: "text.bubble", presented: draft.danmaku_open) {
+                            Stack(appearance: dark, tint: text.primary) { player_danmaku_quick(app: app) }
                         }
-                        PopoverButton(panel_appearance: surface, id: compose_danmaku, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send danmaku" }, icon: "paperplane", presented: draft.composer_open) {
-                            player_danmaku_composer(app: app)
+                        PopoverButton(id: compose_danmaku, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send danmaku" }, icon: "paperplane", presented: draft.composer_open) {
+                            Stack(appearance: dark, tint: text.primary) { player_danmaku_composer(app: app) }
                         }
                     }
                 }
@@ -604,12 +724,12 @@ pub fn player_controls(
             Stack(variant: player_buttons) {
                 ControlGroup(height: 40) {
                     player_subtitle_menu(app: app)
-                    PopoverButton(panel_appearance: surface, id: rate, icon: "speedometer", label: tr! { "zh-Hans" => "播放速度", "en" => "Playback speed" }, presented: draft.rate_open) {
-                        player_speed_menu(app: app)
+                    PopoverButton(id: rate, icon: "speedometer", label: tr! { "zh-Hans" => "播放速度", "en" => "Playback speed" }, presented: draft.rate_open) {
+                        Stack(appearance: dark, tint: text.primary) { player_speed_menu(app: app) }
                     }
                     if (build.modules.enhance && app.features.enhance) {
-                        PopoverButton(panel_appearance: surface, id: enhancement, icon: "sparkles", label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, presented: draft.enhancement_open) {
-                            player_enhancement_menu(app: app)
+                        PopoverButton(id: enhancement, icon: "sparkles", label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, presented: draft.enhancement_open) {
+                            Stack(appearance: dark, tint: text.primary) { player_enhancement_menu(app: app) }
                         }
                     }
                     if !window.short {
@@ -628,41 +748,44 @@ pub fn player_controls(
 #[component]
 pub fn player_enhancement_menu(app: erika::Client) -> impl View {
     ui! {
-        Column(gap: 4, width: 248, padding: 8) {
+        Column(gap: 12, width: 268, padding: 4) {
             Text(content: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, style: title3)
-            Canvas(height: 8)
-            Button(id: enhancement_off, label: tr! { "zh-Hans" => "关闭", "en" => "Off" }, variant: player_picture) {
-                Row(height: 36, padding_x: 4) {
-                    Text(content: tr! { "zh-Hans" => "关闭", "en" => "Off" }) Spacer
-                    if app.player.enhancement == Enhancement::Off {
-                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
-                    }
+            Stack(variant: row_group) {
+                Column(gap: 2, padding: 4) {
+                    Button(id: enhancement_off, label: tr! { "zh-Hans" => "关闭", "en" => "Off" }, variant: row) {
+                        Row(gap: 10, height: 32, padding_x: 4, align: center) {
+                            Text(content: tr! { "zh-Hans" => "关闭", "en" => "Off" }) Spacer
+                            if app.player.enhancement == Enhancement::Off {
+                                Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                            }
+                        }
+                    } => app.set_enhancement(Enhancement::Off)
+                    Button(id: enhancement_artcnn, label: tr! { "zh-Hans" => "ArtCNN 2×", "en" => "ArtCNN 2×" }, variant: row) {
+                        Row(gap: 10, height: 32, padding_x: 4, align: center) {
+                            Text(content: tr! { "zh-Hans" => "ArtCNN 2×", "en" => "ArtCNN 2×" }) Spacer
+                            if app.player.enhancement == Enhancement::ArtCnn {
+                                Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                            }
+                        }
+                    } => app.set_enhancement(Enhancement::ArtCnn)
+                    Button(id: enhancement_quality, label: tr! { "zh-Hans" => "ArtCNN 2× 高质量", "en" => "ArtCNN 2× high quality" }, variant: row) {
+                        Row(gap: 10, height: 32, padding_x: 4, align: center) {
+                            Text(content: tr! { "zh-Hans" => "ArtCNN 2× 高质量", "en" => "ArtCNN 2× high quality" }) Spacer
+                            if app.player.enhancement == Enhancement::ArtCnnQuality {
+                                Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                            }
+                        }
+                    } => app.set_enhancement(Enhancement::ArtCnnQuality)
+                    Button(id: enhancement_denoise, label: tr! { "zh-Hans" => "ArtCNN 2× 降噪", "en" => "ArtCNN 2× denoise" }, variant: row) {
+                        Row(gap: 10, height: 32, padding_x: 4, align: center) {
+                            Text(content: tr! { "zh-Hans" => "ArtCNN 2× 降噪", "en" => "ArtCNN 2× denoise" }) Spacer
+                            if app.player.enhancement == Enhancement::ArtCnnDenoise {
+                                Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                            }
+                        }
+                    } => app.set_enhancement(Enhancement::ArtCnnDenoise)
                 }
-            } => app.set_enhancement(Enhancement::Off)
-            Button(id: enhancement_artcnn, label: tr! { "zh-Hans" => "ArtCNN 2×", "en" => "ArtCNN 2×" }, variant: player_picture) {
-                Row(height: 36, padding_x: 4) {
-                    Text(content: tr! { "zh-Hans" => "ArtCNN 2×", "en" => "ArtCNN 2×" }) Spacer
-                    if app.player.enhancement == Enhancement::ArtCnn {
-                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
-                    }
-                }
-            } => app.set_enhancement(Enhancement::ArtCnn)
-            Button(id: enhancement_quality, label: tr! { "zh-Hans" => "ArtCNN 2× 高质量", "en" => "ArtCNN 2× high quality" }, variant: player_picture) {
-                Row(height: 36, padding_x: 4) {
-                    Text(content: tr! { "zh-Hans" => "ArtCNN 2× 高质量", "en" => "ArtCNN 2× high quality" }) Spacer
-                    if app.player.enhancement == Enhancement::ArtCnnQuality {
-                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
-                    }
-                }
-            } => app.set_enhancement(Enhancement::ArtCnnQuality)
-            Button(id: enhancement_denoise, label: tr! { "zh-Hans" => "ArtCNN 2× 降噪", "en" => "ArtCNN 2× denoise" }, variant: player_picture) {
-                Row(height: 36, padding_x: 4) {
-                    Text(content: tr! { "zh-Hans" => "ArtCNN 2× 降噪", "en" => "ArtCNN 2× denoise" }) Spacer
-                    if app.player.enhancement == Enhancement::ArtCnnDenoise {
-                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
-                    }
-                }
-            } => app.set_enhancement(Enhancement::ArtCnnDenoise)
+            }
         }
     }
 }
@@ -693,18 +816,21 @@ pub fn player_danmaku_composer(app: erika::Client, #[session] draft: PlayerDraft
 #[component]
 pub fn player_speed_menu(app: erika::Client) -> impl View {
     ui! {
-        Column(gap: 4, width: 180, padding: 8) {
+        Column(gap: 12, width: 224, padding: 4) {
             Text(content: tr! { "zh-Hans" => "播放速度", "en" => "Playback speed" }, style: title3)
-            Canvas(height: 8)
-            ForEach(items: app.speeds, key: id) |speed| {
-                Button(id: rate_option, label: speed.label, variant: player_picture) {
-                    Row(height: 32, padding_x: 4) {
-                        Text(content: speed.label) Spacer
-                        if speed.selected {
-                            Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
-                        }
+            Stack(variant: row_group) {
+                Column(gap: 2, padding: 4) {
+                    ForEach(items: app.speeds, key: id) |speed| {
+                        Button(id: rate_option, label: speed.label, variant: row) {
+                            Row(gap: 10, height: 30, padding_x: 4, align: center) {
+                                Text(content: speed.label) Spacer
+                                if speed.selected {
+                                    Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                                }
+                            }
+                        } => app.set_rate(speed.rate)
                     }
-                } => app.set_rate(speed.rate)
+                }
             }
         }
     }
@@ -1068,37 +1194,65 @@ pub fn player_episodes(app: erika::Client) -> impl View {
 #[component]
 pub fn player_subtitle_menu(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
     ui! {
-        PopoverButton(panel_appearance: surface, id: subtitles, label: tr! { "zh-Hans" => "字幕与音轨", "en" => "Subtitles and audio tracks" }, icon: "text.rectangle", presented: draft.tracks_open) {
-            Column(gap: 12, width: 320, padding: 8) {
-                Text(content: tr! { "zh-Hans" => "字幕与音轨", "en" => "Subtitles and audio tracks" }, style: title3)
-                Stack(height: 320) {
-                    ScrollView {
-                        Column(gap: 4) {
-                            Text(content: tr! { "zh-Hans" => "字幕轨道", "en" => "Subtitle tracks" }, style: caption)
-                            Button(id: no_subtitle, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }, variant: player_picture) {
-                                Row(height: 36, padding_x: 4) {
-                                    Text(content: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) Spacer
-                                    if app.player.subtitle_track < 0 { Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) } }
+        PopoverButton(id: subtitles, label: tr! { "zh-Hans" => "字幕与音轨", "en" => "Subtitles and audio tracks" }, icon: "text.rectangle", presented: draft.tracks_open) {
+            Stack(appearance: dark, tint: text.primary) {
+                Column(gap: 12, width: 340, padding: 4) {
+                    Row(align: center) {
+                        Text(content: tr! { "zh-Hans" => "字幕与音轨", "en" => "Subtitles and audio tracks" }, style: title3)
+                        Spacer
+                        if !window.tv {
+                            Button(id: external_subtitle, label: tr! { "zh-Hans" => "添加外挂", "en" => "Add external" }, icon: "plus", shape: capsule, height: 28, pick: draft.subtitle_file, files: ".ass .ssa .srt .vtt") => app.attach_subtitle(draft.subtitle_file)
+                        }
+                    }
+                    Stack(height: 320) {
+                        ScrollView {
+                            Column(gap: 14) {
+                                Column(gap: 6) {
+                                    Stack(variant: panel_secondary) {
+                                        Row(padding_x: 4) {
+                                            Text(content: tr! { "zh-Hans" => "字幕轨道", "en" => "Subtitle tracks" }, style: caption)
+                                            Spacer
+                                        }
+                                    }
+                                    Stack(variant: row_group) {
+                                        Column(gap: 2, padding: 4) {
+                                            Button(id: no_subtitle, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }, variant: row) {
+                                                Row(gap: 10, height: 32, padding_x: 4, align: center) {
+                                                    Text(content: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) Spacer
+                                                    if app.player.subtitle_track < 0 { Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) } }
+                                                }
+                                            } => app.select_subtitle_track(-1)
+                                            ForEach(items: app.player.subtitle_tracks, key: id) |track| {
+                                                Button(id: quick_subtitle_track, label: track.name, variant: row) {
+                                                    Row(gap: 10, height: 32, padding_x: 4, align: center) {
+                                                        Text(content: track.name, lines: 1) Spacer
+                                                        if app.player.subtitle_track == track.id { Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) } }
+                                                    }
+                                                } => app.select_subtitle_track(track.id)
+                                            }
+                                        }
+                                    }
                                 }
-                            } => app.select_subtitle_track(-1)
-                            ForEach(items: app.player.subtitle_tracks, key: id) |track| {
-                                Button(id: quick_subtitle_track, label: track.name, variant: player_picture) {
-                                    Row(height: 36, padding_x: 4) {
-                                        Text(content: track.name, lines: 1) Spacer
-                                        if app.player.subtitle_track == track.id { Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) } }
+                                Column(gap: 6) {
+                                    Stack(variant: panel_secondary) {
+                                        Row(padding_x: 4) {
+                                            Text(content: tr! { "zh-Hans" => "音频轨道", "en" => "Audio tracks" }, style: caption)
+                                            Spacer
+                                        }
                                     }
-                                } => app.select_subtitle_track(track.id)
-                            }
-                            Button(id: external_subtitle, label: tr! { "zh-Hans" => "添加外挂字幕…", "en" => "Add external subtitles…" }, icon: "plus", prominence: plain, pick: draft.subtitle_file, files: ".ass .ssa .srt .vtt") => app.attach_subtitle(draft.subtitle_file)
-                            Divider
-                            Text(content: tr! { "zh-Hans" => "音频轨道", "en" => "Audio tracks" }, style: caption)
-                            ForEach(items: app.player.audio_tracks, key: id) |track| {
-                                Button(id: quick_audio_track, label: track.name, variant: player_picture) {
-                                    Row(height: 36, padding_x: 4) {
-                                        Text(content: track.name, lines: 1) Spacer
-                                        if app.player.audio_track == track.id { Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) } }
+                                    Stack(variant: row_group) {
+                                        Column(gap: 2, padding: 4) {
+                                            ForEach(items: app.player.audio_tracks, key: id) |track| {
+                                                Button(id: quick_audio_track, label: track.name, variant: row) {
+                                                    Row(gap: 10, height: 32, padding_x: 4, align: center) {
+                                                        Text(content: track.name, lines: 1) Spacer
+                                                        if app.player.audio_track == track.id { Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) } }
+                                                    }
+                                                } => app.select_audio_track(track.id)
+                                            }
+                                        }
                                     }
-                                } => app.select_audio_track(track.id)
+                                }
                             }
                         }
                     }

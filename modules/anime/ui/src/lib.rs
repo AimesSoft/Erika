@@ -702,16 +702,20 @@ pub fn desktop_details(anime: anime::Client) -> impl View {
     ui! {
         if window.short || window.medium {
             ScrollView(appear: page_in) {
-                Column(gap: 0, padding_x: if window.tv { 56 } else { 32 }, padding_y: 12) {
-                    desktop_details_hero(anime: anime)
+                Column(gap: 0, padding_y: 12) {
+                    Column(gap: 0, padding_x: if window.tv { 56 } else { 32 }) {
+                        desktop_details_hero(anime: anime)
+                    }
                     Canvas(height: 24)
                     desktop_details_film(anime: anime)
                     Canvas(height: 20)
                 }
             }
         } else {
-            Column(gap: 0, padding_x: if window.tv { 56 } else { 32 }, padding_y: 12, appear: page_in) {
-                desktop_details_hero(anime: anime)
+            Column(gap: 0, padding_y: 12, appear: page_in) {
+                Column(gap: 0, padding_x: if window.tv { 56 } else { 32 }) {
+                    desktop_details_hero(anime: anime)
+                }
                 Spacer
                 desktop_details_film(anime: anime)
             }
@@ -820,7 +824,7 @@ pub fn season_switcher_capsule(anime: anime::Client) -> impl View {
 pub fn desktop_details_film(anime: anime::Client, #[session] draft: AnimeDraft) -> impl View {
     ui! {
         Column(gap: 0, appear: detail_film_in) {
-            Row(gap: 12, align: center, appear: fade) {
+            Row(gap: 12, padding_x: if window.tv { 56 } else { 10 }, align: center, appear: fade) {
                 Spacer
                 ControlGroup(label: tr! { "zh-Hans" => "剧集翻页", "en" => "Page episodes" }, height: 36) {
                     IconButton(id: film_back, icon: "chevron.left", label: tr! { "zh-Hans" => "上一页", "en" => "Previous" }) => draft.episode.set(anime.first_episode)
@@ -831,7 +835,7 @@ pub fn desktop_details_film(anime: anime::Client, #[session] draft: AnimeDraft) 
             Canvas(height: 4)
             // Only a mouse, which cannot drag it, gets a scroll bar.
             ScrollView(axis: horizontal, snap: start, position: draft.episode, indicators: mouse) {
-                Row(gap: 26, padding_y: 16) {
+                Row(gap: 26, padding_x: if window.tv { 56 } else { 32 }, padding_y: 16) {
                     ForEach(items: anime.episodes, key: id) |episode| {
                         film_entry(anime: anime, episode: episode)
                     }

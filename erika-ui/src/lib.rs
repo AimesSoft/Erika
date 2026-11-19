@@ -99,11 +99,11 @@ style! {
     // Shadow bare content and seek bars; native glass controls keep their own
     // system appearance. Opaque, bright tones stay readable over the picture.
     #[target(macos, ios, tvos, browser, windows, linux)]
-    Stack.player_overlay { shadow: shadow(3, y: 1, opacity: 0.9) }
+    Stack.player_overlay { shadow: shadow(3, y: 1, opacity: 0.45) }
     // Control groups without glass (Windows' bare glyphs, Linux's faint
     // capsule): what they show casts the same shadow over the picture.
     #[target(windows, linux)]
-    Stack.player_buttons { shadow: shadow(3, y: 1, opacity: 0.9) }
+    Stack.player_buttons { shadow: shadow(3, y: 1, opacity: 0.45) }
     // The player's control groups side by side: apart where each is a
     // capsule of its own, as close as the buttons in one where they are
     // bare glyphs (Windows).
@@ -131,11 +131,11 @@ style! {
     // episode navigation; enabled still controls whether an action can run.
     IconButton.player_plain { foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, pressed: scale(0.94, press), disabled: foreground(color(light: "#FFFFFF", dark: "#FFFFFF")) }
     #[target(macos, ios, tvos, browser, windows, linux)]
-    Button.player_plain { shadow: shadow(3, y: 1, opacity: 0.9) }
+    Button.player_plain { shadow: shadow(3, y: 1, opacity: 0.45) }
     #[target(macos, ios, tvos, browser, windows, linux)]
-    IconButton.player_plain { shadow: shadow(3, y: 1, opacity: 0.9) }
+    IconButton.player_plain { shadow: shadow(3, y: 1, opacity: 0.45) }
     #[target(macos, ios, tvos, browser, windows, linux)]
-    IconButton.transport { shadow: shadow(3, y: 1, opacity: 0.9) }
+    IconButton.transport { shadow: shadow(3, y: 1, opacity: 0.45) }
     Stack.player_gold { foreground: color(light: "#FFD24A", dark: "#FFD24A") }
     Stack.player_cyan { foreground: color(light: "#8EE3FF", dark: "#8EE3FF") }
     Stack.player_pink { foreground: color(light: "#FFB3C7", dark: "#FFB3C7") }
@@ -145,7 +145,7 @@ style! {
     Button.remote_surface { hover: none, pressed: none, focus: none }
     IconButton.player_primary { font_size: 38, foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, hover: scale(1.08, snappy), pressed: scale(0.90, press), settle: jelly }
     #[target(macos, ios, tvos, browser, windows, linux)]
-    IconButton.player_primary { shadow: shadow(3, y: 1, opacity: 0.9) }
+    IconButton.player_primary { shadow: shadow(3, y: 1, opacity: 0.45) }
     IconButton.transport { font_size: 16, foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, pressed: scale(0.94, press), disabled: foreground(color(light: "#FFFFFF", dark: "#FFFFFF")) }
     Stack.onboarding_art { background: color(light: "#232A52", dark: "#232A52") }
     // Cards and groups take the system's neutral fill (P2); only the
@@ -708,7 +708,7 @@ pub fn app(
 ) -> impl View {
     ui! {
         WindowSet(handle: AppWindows, primary: main, accent: app.accent, appearance: app.appearance, icon: app.app_icon) {
-            Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.paused && !app.player.panel && !app.matching.open && !app.player.arriving, immersive: app.playing && app.expanded && !app.player.arriving, landscape: app.playing && app.expanded) {
+            Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.player.panel && !app.matching.open && !app.player.arriving, immersive: app.playing && app.expanded && !app.player.arriving, landscape: app.playing && app.expanded) {
                 main_window(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, #[cfg(feature = "bern-module-downloads")] download_module: download_module, windows: windows, players: players)
             }
             Window(id: settings, title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, width: 1000, height: 660, min_width: 1000, min_height: 660, chrome: standard) {
