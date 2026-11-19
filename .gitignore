@@ -3,5 +3,6 @@
 .DS_Store
 .claude/settings.local.json
 /.cargo/config.toml
+/.cargo/bern-local/
 __pycache__/
 *.py[cod]
