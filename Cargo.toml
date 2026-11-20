@@ -4,7 +4,7 @@ exclude = ["third_party/librqbit", "third_party/librqbit-dht"]
 members = ["erika-protocol", "erika-core", "erika-ui", "erika-store", "erika-catalog", "erika-dandanplay", "erika-torrent", "erika-gateway", "modules/account/protocol", "modules/account/core", "modules/danmaku/protocol", "modules/danmaku/core", "modules/danmaku/ui", "modules/enhance/protocol", "modules/enhance/core", "modules/enhance/ui", "modules/library/protocol", "modules/library/core", "modules/library/ui", "modules/anime/protocol", "modules/anime/core", "modules/anime/ui", "modules/sync/protocol", "modules/sync/core", "modules/sync/ui", "modules/sources/protocol", "modules/sources/core", "modules/sources/ui", "modules/remote/protocol", "modules/remote/core", "modules/remote/ui", "modules/downloads/protocol", "modules/downloads/core", "modules/downloads/ui"]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"
@@ -13,9 +13,9 @@ license = "MIT"
 # All native HTTP callers inherit Windows Internet Settings as well as proxy
 # environment variables. Keep this here so independently built modules do too.
 ureq = { version = "3", features = ["win-system-proxy"] }
-# Bern 0.1.19+, at the same immutable revision as the build tool
+# Bern 0.2.0, at the same immutable revision as the build tool
 # (docs/dependencies.md).
-bern = { git = "https://github.com/AimesSoft/Bern", rev = "514bc2e9881c67eaf30e17450c040bab314c53a0" }
+bern = { git = "https://github.com/AimesSoft/Bern", rev = "2f68b2361bbba93a8900fcee1a6d704c0a76c886" }
 erika-protocol = { path = "erika-protocol", default-features = false }
 erika-store = { path = "erika-store" }
 erika-catalog = { path = "erika-catalog" }
