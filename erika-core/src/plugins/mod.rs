@@ -1888,7 +1888,8 @@ fn import_script(path: &std::path::Path) -> Result<Pack, String> {
 
 /// The `pluginManifest` a script declares, read in a context of its own.
 fn manifest_of(script: &str) -> Result<Value, String> {
-    let context = bern::script::Context::new().map_err(|error| error.to_string())?;
+    let context = bern::script::Context::with_policy(bern::script::CliPolicy::deny_all())
+        .map_err(|error| error.to_string())?;
     let stubs = "var __s = new Proxy(function(){ return __s; }, { get: function(){ return __s; } });\
                  var player = __s, danmaku = __s, ui = __s, storage = __s, settings = __s, dev = __s, system = __s, process = __s, plugin = __s, net = __s, library = __s;\n";
     let source = format!(

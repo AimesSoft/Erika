@@ -18,7 +18,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  BERN_REV: ae8c242aaba0738bf4a2c7eb5aa499194de4e18c
+  BERN_REV: 0858b115dd4af31c1bf9b6012eba721dd66f218b
 
 jobs:
   # The browser half of playback, the same for every WebUI.

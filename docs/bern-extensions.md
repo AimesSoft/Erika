@@ -291,7 +291,7 @@ Bern 的内容按钮补齐对内部弹性视图的尺寸传递，修复播放器
 
 ## JavaScript 与无 WebView 目标
 
-所有 Erika 目标启用 `javascript = true`，通过 `bern::script::Context` 执行脚本。macOS/iOS、Android、Windows、Linux 使用系统 WebView，Web 使用浏览器 Worker，tvOS 自动选择 Boa；其它发行目标可指定 `webview = false` 同样使用 Boa。
+所有 Erika 目标启用 `javascript = true`，通过 `bern::script::Context` 执行脚本。所有原生目标在进程内启用 Boa，Web 使用浏览器 Worker，并内置进程内异步 `bern.cli(...)` 接口；Erika 在 `erika-core/src/plugins/pack.rs` 中根据插件声明权限构造 `CliPolicy`（`"cli"` 全量开放，`"cli:<模式>"` 与既有权限按白名单映射，导入扫描使用 `CliPolicy::deny_all()`）。
 
 引导与关于页的 `Svg` 指定 `static_source: "design/brand/erika-icon-export/logo/erika-logo-icon.svg"`。Bern 在无 WebView 目标的构建阶段把最终矢量稿转换成 PNG，并使用 `Image` 显示，因此 Logo 直接显示最终状态，跳过入场动画。已有 WebView 的目标保持动画和交互。
 

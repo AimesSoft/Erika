@@ -68,7 +68,7 @@ impl Runtime {
         requires: &[String],
         snapshot: &Value,
     ) -> Result<Runtime, String> {
-        let context = Context::new().map_err(|error| error.to_string())?;
+        let context = Context::with_policy(pack.cli_policy()).map_err(|error| error.to_string())?;
         let config = json!({
             "id": pack.id,
             "name": pack.name,

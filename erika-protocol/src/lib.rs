@@ -355,6 +355,10 @@ pub mod erika {
         /// line along its bottom.
         #[label(tr! { "zh-Hans" => "播放画面叠加", "en" => "Player overlay" })]
         PlayerOverlay,
+        /// In-process Bern CLI access (`bern.cli`), allowing a plugin to invoke
+        /// Erika's commands and queries directly.
+        #[label(tr! { "zh-Hans" => "应用命令", "en" => "Application commands" })]
+        Cli,
     }
     #[value]
     pub struct PluginTag {

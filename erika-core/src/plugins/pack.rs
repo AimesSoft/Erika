@@ -175,10 +175,153 @@ impl Pack {
 
     /// The permissions Erika knows, as the market tags them.
     pub fn tags(&self) -> Vec<PluginPermission> {
-        self.permissions
-            .iter()
-            .filter_map(|id| permission(id))
-            .collect()
+        let mut tags = Vec::new();
+        for id in &self.permissions {
+            let mapped =
+                permission(id).or_else(|| id.strip_prefix("cli:").map(|_| PluginPermission::Cli));
+            if let Some(tag) = mapped
+                && !tags.contains(&tag)
+            {
+                tags.push(tag);
+            }
+        }
+        tags
+    }
+
+    /// Build the `bern.cli` allowlist / denylist policy for this plugin's
+    /// JavaScript context from its declared permissions.
+    ///
+    /// Declaring `"cli"` grants unrestricted access (`CliPolicy::allow_all`);
+    /// declaring `"cli:<pattern>"` grants specific command IDs or namespaces;
+    /// otherwise Erika's standard permissions unlock their matching command
+    /// namespaces. `catalog` and `help` are always readable and filtered by
+    /// the active policy.
+    pub fn cli_policy(&self) -> bern::script::CliPolicy {
+        if self.has("cli") {
+            return bern::script::CliPolicy::allow_all().with_label(self.id.clone());
+        }
+        let mut policy = bern::script::CliPolicy::deny_all()
+            .allow("catalog")
+            .allow("help")
+            .with_label(self.id.clone());
+        for id in &self.permissions {
+            if let Some(pattern) = id.strip_prefix("cli:") {
+                let pattern = pattern.trim();
+                if !pattern.is_empty() {
+                    policy = policy.allow(pattern);
+                }
+                continue;
+            }
+            match id.as_str() {
+                "player.control" => {
+                    policy = policy.allow_many([
+                        "media.*",
+                        "enhance.*",
+                        "state",
+                        "erika.open_file",
+                        "erika.open_folder",
+                        "erika.open_link",
+                        "erika.open_url",
+                        "erika.play_recent",
+                        "erika.continue_last",
+                        "erika.play_media",
+                        "erika.play",
+                        "erika.play_download",
+                        "erika.minimize",
+                        "erika.expand",
+                        "erika.close_player",
+                        "erika.toggle_pause",
+                        "erika.seek",
+                        "erika.skip",
+                        "erika.seek_chapter",
+                        "erika.skip_segment",
+                        "erika.select_episode",
+                        "erika.change_episode",
+                        "erika.player_panel",
+                        "erika.player_tab",
+                        "erika.select_subtitle_track",
+                        "erika.select_audio_track",
+                        "erika.set_speed",
+                        "erika.set_rate",
+                        "erika.set_enhancement",
+                        "erika.set_subtitle_supersampling",
+                        "erika.set_player_number",
+                        "erika.preview_player_volume",
+                        "erika.set_skip_intro",
+                        "erika.attach_subtitle",
+                        "erika.screenshot",
+                    ]);
+                }
+                "danmaku.modify" => {
+                    policy = policy.allow_many([
+                        "danmaku.*",
+                        "erika.send_danmaku",
+                        "erika.set_danmaku_area",
+                        "erika.set_danmaku_number",
+                        "erika.set_danmaku_switch",
+                        "erika.mount_danmaku",
+                        "erika.set_danmaku_offset",
+                        "erika.shift_danmaku_offset",
+                        "erika.set_danmaku_color",
+                        "erika.set_danmaku_color_hex",
+                    ]);
+                }
+                "library.read" => {
+                    policy = policy.allow_many(["@queries", "state"]);
+                }
+                "library.write" => {
+                    policy = policy.allow_many([
+                        "library.*",
+                        "anime.*",
+                        "downloads.*",
+                        "erika.open_library_file",
+                        "erika.open_library_show",
+                    ]);
+                }
+                "library.sources" => {
+                    policy = policy.allow("sources.*");
+                }
+                "ui.dialog" => {
+                    policy = policy.allow_many([
+                        "ui.*",
+                        "window.*",
+                        "sessions",
+                        "erika.show_notice",
+                        "erika.show_link_prompt",
+                        "erika.show_about",
+                        "erika.show_help",
+                    ]);
+                }
+                "settings.read" => {
+                    policy =
+                        policy.allow_many(["state", "erika.find_settings", "erika.search_actions"]);
+                }
+                "settings.modify" => {
+                    policy = policy.allow_many([
+                        "erika.set_startup",
+                        "erika.set_playback_end",
+                        "erika.set_language",
+                        "erika.set_update_channel",
+                        "erika.set_preference",
+                        "erika.set_module",
+                        "erika.apply_preset",
+                        "erika.set_accent",
+                        "erika.set_appearance",
+                        "erika.set_app_icon",
+                        "erika.set_shortcut",
+                        "erika.reset_shortcut",
+                        "erika.reset_shortcuts",
+                        "remote.*",
+                        "sync.*",
+                    ]);
+                }
+                "system.override" => {
+                    policy = policy.allow_many(["downloads.*", "erika.remote_control"]);
+                }
+                _ => {}
+            }
+        }
+        policy
     }
 
     /// What it needs that Erika cannot give, in words for the user.
@@ -240,6 +383,7 @@ pub fn permission(id: &str) -> Option<PluginPermission> {
         "system.override" => PluginPermission::SystemOverride,
         "network" => PluginPermission::Network,
         "player.overlay" => PluginPermission::PlayerOverlay,
+        "cli" => PluginPermission::Cli,
         _ => return None,
     })
 }
@@ -363,5 +507,39 @@ mod tests {
         assert_eq!(pack.unsupported(), vec!["WebView 弹幕渲染层"]);
         assert_eq!(Pack::from_installed(&pack.to_value()).unwrap(), pack);
         assert!(newer("1.10.0", "1.9.9") && !newer("1.0", "1.0.0"));
+    }
+
+    #[test]
+    fn cli_policy_maps_permissions_and_supports_full_or_scoped_cli() {
+        use bern::script::CliTargetKind;
+
+        let full = Pack::from_pack(&json!({
+            "id": "erika.power", "name": "Power", "version": "1.0.0",
+            "category": "tools", "permissions": ["cli"],
+        }))
+        .unwrap();
+        assert_eq!(full.tags(), vec![PluginPermission::Cli]);
+        let full_policy = full.cli_policy();
+        assert_eq!(full_policy.label(), Some("erika.power"));
+        assert!(full_policy.allows_target("media.seek", CliTargetKind::MediaCommand));
+        assert!(full_policy.allows_target("downloads.add", CliTargetKind::EngineCommand));
+        assert!(full_policy.allows_target("ui.activate", CliTargetKind::SessionCommand));
+        assert!(full_policy.allows_target("state", CliTargetKind::State));
+
+        let scoped = Pack::from_pack(&json!({
+            "id": "erika.scoped", "name": "Scoped", "version": "1.0.0",
+            "category": "tools", "permissions": ["player.control", "cli:downloads.add"],
+        }))
+        .unwrap();
+        assert_eq!(
+            scoped.tags(),
+            vec![PluginPermission::PlayerControl, PluginPermission::Cli]
+        );
+        let scoped_policy = scoped.cli_policy();
+        assert!(scoped_policy.allows_target("media.seek", CliTargetKind::MediaCommand));
+        assert!(scoped_policy.allows_target("downloads.add", CliTargetKind::EngineCommand));
+        assert!(!scoped_policy.allows_target("downloads.delete", CliTargetKind::EngineCommand));
+        assert!(!scoped_policy.allows_target("ui.activate", CliTargetKind::SessionCommand));
+        assert!(scoped_policy.allows_target("catalog", CliTargetKind::Catalog));
     }
 }
