@@ -741,6 +741,7 @@ impl Session {
             color: DanmakuColor::rgb_u8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8),
             opacity: 1.0,
             is_self: true,
+            special: None,
         });
         let Ok(timeline) = DanmakuTimeline::new(self.own_danmaku.clone()) else {
             return;

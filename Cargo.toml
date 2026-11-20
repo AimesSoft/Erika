@@ -13,9 +13,9 @@ license = "MIT"
 # All native HTTP callers inherit Windows Internet Settings as well as proxy
 # environment variables. Keep this here so independently built modules do too.
 ureq = { version = "3", features = ["win-system-proxy"] }
-# Bern 0.2.0, at the same immutable revision as the build tool
+# Bern 0.2.1, at the same immutable revision as the build tool
 # (docs/dependencies.md).
-bern = { git = "https://github.com/AimesSoft/Bern", rev = "2f68b2361bbba93a8900fcee1a6d704c0a76c886" }
+bern = { git = "https://github.com/AimesSoft/Bern", rev = "ae8c242aaba0738bf4a2c7eb5aa499194de4e18c" }
 erika-protocol = { path = "erika-protocol", default-features = false }
 erika-store = { path = "erika-store" }
 erika-catalog = { path = "erika-catalog" }
@@ -23,6 +23,6 @@ erika-dandanplay = { path = "erika-dandanplay" }
 erika-torrent = { path = "erika-torrent" }
 # Remote builds use the pinned source revision; .cargo/config.toml can patch
 # this to a local checkout. See docs/dependencies.md.
-liberika = { package = "erika", git = "https://github.com/AimesSoft/liberika", rev = "e38a511561cb30ca57bd370b944d2e99b12737c7" }
+liberika = { package = "erika", git = "https://github.com/AimesSoft/liberika", rev = "b9881a72dc6cb822865c74858c45ce2d4c8d4960" }
 # The playback half of the plugin interface, without native libraries.
-liberika-plugin = { package = "erika_plugin", git = "https://github.com/AimesSoft/liberika", rev = "e38a511561cb30ca57bd370b944d2e99b12737c7" }
+liberika-plugin = { package = "erika_plugin", git = "https://github.com/AimesSoft/liberika", rev = "b9881a72dc6cb822865c74858c45ce2d4c8d4960" }

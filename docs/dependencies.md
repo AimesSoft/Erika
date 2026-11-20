@@ -1,15 +1,15 @@
 # Cargo 依赖与本地联调
 
-仓库内 `Cargo.toml` 的 Bern 固定到已合入 `master` 的 Bern `0.2.0` 提交 `2f68b23`（包含默认骨架图系统、内置窗口截图指令、完整内置控件体系及 `NativeView` 等能力，以及此前的页面持有查询、动画 SVG 引擎、沉浸窗口指针隐藏、原生液态玻璃容器与 macOS 统一顶栏改进）；liberika 用 Git 依赖，固定到提交。GitHub 或另一台电脑检出 Erika 后，Cargo 会下载同一份源码，无需本机的绝对路径。
+仓库内 `Cargo.toml` 的 Bern 固定到已合入 `master` 的 Bern `0.2.1` 提交 `ae8c242`（包含默认骨架图系统、内置窗口截图指令、完整内置控件体系、`NativeView` 与 WinUI 3 全屏退出标题栏修复、Compose 布局与效果作用域修复等能力）；liberika 用 Git 依赖，固定到提交。GitHub 或另一台电脑检出 Erika 后，Cargo 会下载同一份源码，无需本机的绝对路径。
 
-liberika 当前固定到 `v0.3.6` 的提交 `e38a511`（弹幕彩色表情、系统字体优先，WebUI 用宿主的回退字体）。后续升级时更新版本或 `rev`，以及 `Cargo.lock`。
+liberika 当前固定到 `v0.3.8` 的提交 `b9881a7`（Windows VS 2026 / MSVC 14.52 兼容、D3D11/Metal 渲染与字幕缓冲优化、HTTP 续传与可取消打开等）。后续升级时更新版本或 `rev`，以及 `Cargo.lock`。
 
 ## 构建工具 bern
 
 `bern` 命令与 `Cargo.toml` 里的 Bern 同一版本：命令带着生成各平台工程的模板，与应用依赖的 Bern 一致才能构建。
 
 ```sh
-cargo install --locked --git https://github.com/AimesSoft/Bern --rev 2f68b2361bbba93a8900fcee1a6d704c0a76c886 bern-cli
+cargo install --locked --git https://github.com/AimesSoft/Bern --rev ae8c242aaba0738bf4a2c7eb5aa499194de4e18c bern-cli
 ```
 
 升级 Bern 时，根目录 `Cargo.toml` 的 `bern`、`erika-core/Cargo.toml` 的 `bern-script`、`.github/workflows/release.yml` 的 `BERN_REV` 与这条命令一起换，再装一次。之后在 Erika 根目录运行 `bern run`、`bern build --target <目标>`、`bern package --target <目标>`；`bern doctor` 列出本机构建各目标还缺什么。
