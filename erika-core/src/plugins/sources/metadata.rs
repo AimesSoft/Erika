@@ -25,7 +25,7 @@ pub(in crate::plugins) struct Queue {
 }
 
 impl ErikaEngine {
-    pub(crate) fn recognize_source_item(&mut self, url: &str) -> Result<()> {
+    pub(crate) fn recognize_source_item(&mut self, url: &str) -> Result<bool> {
         if let Some(entry) = self.db.plugin_source_item(url)?
             && self.source_metadata_allowed(&entry.owner)
         {
@@ -33,8 +33,9 @@ impl ErikaEngine {
                 .source_metadata
                 .pending
                 .insert(entry.url, (entry.owner, 0));
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
     pub(in crate::plugins) fn queue_source_metadata(
@@ -102,7 +103,7 @@ impl ErikaEngine {
                 .is_some_and(|p| p.loaded && p.pack.has("library.sources"))
     }
     /// At most one HTTP chain per engine and one lease per file across engines.
-    pub(in crate::plugins) fn drive_source_metadata(&mut self) {
+    pub(crate) fn drive_source_metadata(&mut self) {
         if !self.state.preferences.auto_match || self.plugins.source_metadata.active.is_some() {
             return;
         }
@@ -277,11 +278,28 @@ impl ErikaEngine {
                     self.plugins
                         .source_metadata
                         .pending
-                        .insert(work.entry.url, (work.entry.owner, job.next_attempt));
+                        .insert(work.entry.url.clone(), (work.entry.owner, job.next_attempt));
                 }
                 self.catalogue_changed();
+                if let Some(file) = self.file
+                    && self
+                        .current_source()
+                        .is_some_and(|s| s.url == work.entry.url)
+                {
+                    let matched = self.db.catalog_binding(file).ok().flatten().is_some();
+                    self.on_preload_recognition_finished(file, matched, false);
+                }
             }
-            Err(error) => self.plugin_failed(&work.entry.owner, error.message),
+            Err(error) => {
+                self.plugin_failed(&work.entry.owner, error.message);
+                if let Some(file) = self.file
+                    && self
+                        .current_source()
+                        .is_some_and(|s| s.url == work.entry.url)
+                {
+                    self.on_preload_recognition_finished(file, false, false);
+                }
+            }
         }
     }
 }

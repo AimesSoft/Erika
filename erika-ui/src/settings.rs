@@ -42,6 +42,9 @@ pub fn settings(
 ) -> impl View {
     ui! {
         Stack {
+        if app.settings_open_revision > 0 {
+            Watch(value: app.settings_open_revision) => draft.page.set(app.settings_page)
+        }
         if window.tv {
             tv_settings(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
         } else {
@@ -49,14 +52,16 @@ pub fn settings(
             SplitView {
                 Sidebar(id: settings_sections, width: 220, selection: draft.page) {
                     Search(id: settings_search, value: draft.query, prompt: tr! { "zh-Hans" => "搜索设置", "en" => "Search settings" }, shortcut: app.keys.search) {
-                        Query(id: settings_results, query: app.find_settings(draft.query), empty: tr! { "zh-Hans" => "没有匹配的设置", "en" => "No matching settings" }) |results| {
-                            ForEach(items: results, key: id) |result| {
-                                Button(id: settings_result, label: result.item, variant: row, clears: draft.query) {
-                                    Column(gap: 2) {
-                                        Text(content: result.item)
-                                        Text(content: result.page, style: caption, emphasis: secondary)
-                                    }
-                                } => draft.page.set(result.page)
+                        if "" != draft.query {
+                            Query(id: settings_results, query: app.find_settings(draft.query), empty: tr! { "zh-Hans" => "没有匹配的设置", "en" => "No matching settings" }) |results| {
+                                ForEach(items: results, key: id) |result| {
+                                    Button(id: settings_result, label: result.item, variant: row, clears: draft.query) {
+                                        Column(gap: 2) {
+                                            Text(content: result.item)
+                                            Text(content: result.page, style: caption, emphasis: secondary)
+                                        }
+                                    } => draft.page.set(result.page)
+                                }
                             }
                         }
                     }
@@ -748,6 +753,7 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
             }
             Section(title: tr! { "zh-Hans" => "来源", "en" => "Sources" }) {
                 Switch(id: auto_match, label: tr! { "zh-Hans" => "弹弹play 自动匹配", "en" => "Automatically match with Dandanplay" }, checked: app.preferences.auto_match, style: switch) => app.set_preference("auto_match", app.preferences.auto_match)
+                Switch(id: load_danmaku_before_play, label: tr! { "zh-Hans" => "播放前加载弹幕", "en" => "Load danmaku before playback" }, checked: app.preferences.load_danmaku_before_play, style: switch) => app.set_preference("load_danmaku_before_play", app.preferences.load_danmaku_before_play)
                 // A television has no files to mount.
                 if !window.tv {
                     Row(gap: 12, align: center) {
@@ -1184,7 +1190,11 @@ pub fn settings_about(app: erika::Client) -> impl View {
                 Column(gap: 6, padding_y: 12, align: center) {
                     Row {
                         Spacer
-                        Svg(source: "design/brand/erika-icon-animated.svg", static_source: "design/brand/erika-icon-export/logo/erika-logo-icon.svg", width: 104, height: 104, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                        if app.app_icon == AppIcon::Skin {
+                            Image(source: "design/brand/erika-icon-export/skin/logo/erika-logo-icon-512.png", width: 104, height: 104, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                        } else {
+                            Svg(source: "design/brand/erika-icon-animated.svg", static_source: "design/brand/erika-icon-export/logo/erika-logo-icon.svg", width: 104, height: 104, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                        }
                         Spacer
                     }
                     Stack(variant: settings_wordmark) {

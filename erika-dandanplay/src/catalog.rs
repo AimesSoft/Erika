@@ -661,6 +661,7 @@ async fn read_from<T: DeserializeOwned>(
         .map(|token| format!("Bearer {token}"));
     let mut headers = vec![
         ("Accept", "application/json"),
+        ("User-Agent", "NipaPlay/1.0"),
         ("X-AppId", super::APP_ID),
         ("X-Timestamp", timestamp.as_str()),
         ("X-Signature", signature.as_str()),
@@ -688,7 +689,7 @@ async fn read_from<T: DeserializeOwned>(
             &headers,
             std::time::Duration::from_secs(15),
             8 * 1024 * 1024,
-            false,
+            true,
         )
         .await;
         let Ok(response) = response else { continue };
@@ -870,6 +871,68 @@ mod tests {
             }
         }
         worker.join().unwrap();
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn comments_follows_302_redirect_without_forwarding_authorization() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        let cdn = TcpListener::bind("127.0.0.1:0").unwrap();
+        let cdn_addr = cdn.local_addr().unwrap();
+        let gateway = TcpListener::bind("127.0.0.1:0").unwrap();
+        let gateway_base = format!("http://{}/dandanplay", gateway.local_addr().unwrap());
+
+        let gw_thread = std::thread::spawn(move || {
+            let (mut stream, _) = gateway.accept().unwrap();
+            let mut req = Vec::new();
+            let mut byte = [0];
+            while !req.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                req.push(byte[0]);
+            }
+            let text = String::from_utf8(req).unwrap().to_ascii_lowercase();
+            assert!(text.contains("authorization: bearer secret-token"));
+            let location = format!("http://{cdn_addr}/comments.json");
+            write!(
+                stream,
+                "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+
+        let cdn_thread = std::thread::spawn(move || {
+            let (mut stream, _) = cdn.accept().unwrap();
+            let mut req = Vec::new();
+            let mut byte = [0];
+            while !req.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                req.push(byte[0]);
+            }
+            let text = String::from_utf8(req).unwrap().to_ascii_lowercase();
+            assert!(!text.contains("authorization:"));
+            let body = r#"{"count":1,"comments":[{"cid":7,"p":"12.5,1,16777215,u","m":"hello"}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+
+        let reply: super::super::CommentsReply = futures_lite::future::block_on(read_from(
+            &[&gateway_base],
+            "/api/v2/comment/123",
+            "?withRelated=true&chConvert=1",
+            Some("secret-token"),
+        ))
+        .unwrap();
+        assert_eq!(reply.comments.len(), 1);
+        assert_eq!(reply.comments[0].m, "hello");
+        gw_thread.join().unwrap();
+        cdn_thread.join().unwrap();
     }
 
     #[test]

@@ -13,6 +13,7 @@ mod web;
 use erika_protocol::erika::Enhancement;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// The application player Erika plays in: `Players::video` of the
 /// interface, the name every entry addresses it by.
@@ -99,6 +100,14 @@ pub trait Kernel: Send + Sync {
     /// (the video's own width when `None`) as a PNG at `path`;
     /// [`Playback::still`] names it once it is written.
     fn capture(&self, path: &Path, width: Option<u32>);
+    /// Save the picture on screen like [`Kernel::capture`] and wait up to
+    /// `timeout` for it to finish writing so an immediate transition can show
+    /// the fresh still on its first frame. Returns `true` if `path` was
+    /// written before `timeout`.
+    fn capture_now(&self, path: &Path, width: Option<u32>, _timeout: Duration) -> bool {
+        self.capture(path, width);
+        false
+    }
     /// Stop playing and let go of the media.
     fn close(&self);
     fn playback(&self) -> Playback;

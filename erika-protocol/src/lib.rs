@@ -209,6 +209,7 @@ pub mod erika {
         pub hardware_decode: bool,
         pub show_danmaku: bool,
         pub auto_match: bool,
+        pub load_danmaku_before_play: bool,
         pub sync_storage: bool,
         pub merge_seasons: bool,
         pub startup: StartupPage,
@@ -276,6 +277,8 @@ pub mod erika {
         DanmakuArea,
         #[label(tr! { "zh-Hans" => "弹弹play 自动匹配", "en" => "Automatically Match with Dandanplay" })]
         AutoMatch,
+        #[label(tr! { "zh-Hans" => "播放前加载弹幕", "en" => "Load Danmaku Before Playback" })]
+        LoadDanmakuBeforePlay,
         #[label(tr! { "zh-Hans" => "挂载本地弹幕", "en" => "Mount Local Danmaku" })]
         MountDanmaku,
         #[label(tr! { "zh-Hans" => "同步与存储", "en" => "Sync and Storage" })]
@@ -837,6 +840,7 @@ pub mod erika {
         pub start: f64,
         pub end: f64,
         pub at: f64,
+        pub end_at: f64,
         /// Space before the next chapter label on the desktop's 1074 pt rail.
         pub label_width: f64,
         pub kind: SkipKind,
@@ -887,6 +891,42 @@ pub mod erika {
         #[content]
         pub season: String,
         pub episodes: Vec<MatchingItem>,
+    }
+
+    /// A single stage line shown in the pre-playback loading overlay while
+    /// waiting for recognition and online danmaku before opening the video.
+    #[value]
+    pub enum LoadingMessage {
+        #[label(tr! { "zh-Hans" => "正在识别视频信息…", "en" => "Recognizing video…" })]
+        Recognizing,
+        #[label(tr! { "zh-Hans" => "已识别视频信息", "en" => "Video recognized" })]
+        Recognized,
+        #[label(tr! { "zh-Hans" => "未自动匹配到剧集", "en" => "No automatic match found" })]
+        Unmatched,
+        #[label(tr! { "zh-Hans" => "正在加载弹弹play 弹幕…", "en" => "Loading Dandanplay danmaku…" })]
+        LoadingDanmaku,
+        #[label(tr! { "zh-Hans" => "已加载 {count} 条弹幕", "en" => "Loaded {count} danmaku" })]
+        DanmakuLoaded { count: i64 },
+        #[label(tr! { "zh-Hans" => "弹幕加载失败，继续播放", "en" => "Danmaku failed to load; continuing playback" })]
+        DanmakuFailed,
+        #[label(tr! { "zh-Hans" => "加载超时，正在启动播放…", "en" => "Timed out; starting playback…" })]
+        TimedOut,
+        #[label(tr! { "zh-Hans" => "正在准备视频播放…", "en" => "Preparing video playback…" })]
+        StartingPlayback,
+    }
+
+    #[value]
+    pub struct LoadingStep {
+        pub id: i64,
+        pub message: LoadingMessage,
+        pub done: bool,
+    }
+
+    #[value]
+    pub struct PlayerLoading {
+        pub active: bool,
+        pub cover: MediaSource,
+        pub steps: Vec<LoadingStep>,
     }
 
     #[value]
@@ -965,6 +1005,8 @@ pub mod erika {
         pub danmaku_density: Vec<f64>,
         pub danmaku_density_shown: bool,
         pub danmaku_density_color: PluginColor,
+        /// Pre-playback loading overlay while recognition and danmaku load before play.
+        pub loading: PlayerLoading,
     }
 
     /// An action with a keyboard shortcut, as 「设置 › 快捷键」 lists it.
@@ -1040,7 +1082,11 @@ pub mod erika {
         /// The preset the enabled modules are exactly, or `Custom`.
         pub preset: OnboardingPreset,
         pub notice: Option<Notice>,
+        pub has_notice: bool,
         pub notice_revision: i64,
+        /// Target page requested when jumping into Settings from global search.
+        pub settings_page: SettingsPage,
+        pub settings_open_revision: i64,
         pub plugins: Vec<Plugin>,
         pub plugin_category: PluginCategory,
         pub plugin_tab: PluginTab,
@@ -1441,6 +1487,8 @@ pub mod erika {
         fn back_to_match_results(&mut self) -> Result<(), CommandError>;
         fn confirm_match_episode(&mut self, id: String) -> Result<(), CommandError>;
         fn block_media_match(&mut self) -> Result<(), CommandError>;
+        /// Stop waiting for pre-playback danmaku loading and start playing immediately.
+        fn skip_danmaku_preload(&mut self) -> Result<(), CommandError>;
         fn send_danmaku(&mut self, text: String) -> Result<(), CommandError>;
         /// Set a danmaku slider: `opacity`, `font_size`, `speed` (0 to 1)
         /// or `delay` (seconds).
@@ -1517,6 +1565,11 @@ pub mod erika {
 
         fn set_appearance(&mut self, appearance: Appearance) -> Result<(), CommandError>;
         fn set_app_icon(&mut self, icon: AppIcon) -> Result<(), CommandError>;
+        /// Clear `notice` once its display duration has elapsed so reopening
+        /// settings or re-expanding the player does not replay stale notices.
+        fn expire_notice(&mut self) -> Result<(), CommandError>;
+        /// Open the settings window directly on `page`.
+        fn open_settings_page(&mut self, page: SettingsPage) -> Result<(), CommandError>;
 
         /// Open an http(s) address in the system's browser.
         #[errors("invalid_url", "platform_unavailable")]

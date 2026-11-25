@@ -72,6 +72,10 @@ pub struct AnimeEngine {
     metadata: metadata::Runtime,
     /// Coalesce writes made while draining one batch of worker replies.
     catalog_written: bool,
+    /// Cached SQLite calendar projection keyed by dandanplay `source_key`,
+    /// invalidated whenever season/metadata/catalog data changes so the
+    /// per-minute clock tick does not re-query SQLite for every show.
+    calendar_projection: Option<std::collections::HashMap<String, (String, String, String)>>,
     provider_editor: provider_editor::Editor,
 }
 
@@ -124,6 +128,7 @@ impl AnimeEngine {
             reviews: reviews::Runtime::default(),
             metadata: metadata::Runtime::default(),
             catalog_written: false,
+            calendar_projection: None,
             provider_editor: provider_editor::Editor::default(),
             state: State {
                 signed_in: accounts.signed_in(),
@@ -242,8 +247,15 @@ fn receiver(inbox: &Arc<Mutex<Vec<Done>>>) -> impl FnOnce(Done) + Send + 'static
 }
 
 impl AnimeEngine {
-    /// The week and today's timeline, as of now.
+    /// The week and today's timeline, as of now (rebuilding metadata projection).
     fn show_season(&mut self) {
+        self.calendar_projection = None;
+        self.show_season_inner();
+    }
+
+    /// Re-layout the week and today's timeline, reusing the cached metadata
+    /// projection when available (used by the per-minute clock tick).
+    fn show_season_inner(&mut self) {
         let clock = Clock::now();
         self.minute = clock.unix.div_euclid(60);
         let mut season = season::build(&self.season, &self.schedule, &clock);
@@ -606,7 +618,11 @@ impl AnimeEngine {
                 Done::RetryMetadata => self.resume_metadata_retry(),
             }
         }
-        if std::mem::take(&mut self.catalog_written) {
+        // Coalesce catalog_changed while a metadata batch is still in flight
+        // so the home page and library do not re-query SQLite after every
+        // single show finishes fetching.
+        if self.catalog_written && self.metadata.is_idle() {
+            self.catalog_written = false;
             anime::emit::catalog_changed();
         }
     }
@@ -1164,7 +1180,7 @@ impl anime::Commands for AnimeEngine {
     /// Lay the timeline out anew once the minute has turned.
     fn tick(&mut self) -> Result<(), CommandError> {
         if Clock::now().unix.div_euclid(60) != self.minute {
-            self.show_season();
+            self.show_season_inner();
         }
         Ok(())
     }

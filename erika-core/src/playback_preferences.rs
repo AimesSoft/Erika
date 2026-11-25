@@ -10,6 +10,7 @@ impl ErikaEngine {
             "hardware_decode",
             "show_danmaku",
             "auto_match",
+            "load_danmaku_before_play",
             "reduce_motion",
             "merge_seasons",
         ] {

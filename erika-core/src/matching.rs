@@ -331,32 +331,64 @@ pub(super) enum Found {
     },
 }
 
+pub(super) enum RecognizeOutcome {
+    Done,
+    WaitingRecognition,
+    WaitingComments,
+}
+
 impl ErikaEngine {
     /// Start recognizing the video at `source`, whose file was just read.
-    pub(super) fn recognize(&mut self, source: &MediaSource, fingerprint: Option<Fingerprint>) {
-        let Some(file) = self.file else { return };
-        match self.show_catalog(file) {
-            Ok(true) => return,
-            Ok(false) => {}
+    pub(super) fn recognize(
+        &mut self,
+        source: &MediaSource,
+        fingerprint: Option<Fingerprint>,
+    ) -> RecognizeOutcome {
+        let Some(file) = self.file else {
+            return RecognizeOutcome::Done;
+        };
+        let fetched_comments = match self.show_catalog(file) {
+            Ok((true, fetched_comments)) => {
+                return if fetched_comments {
+                    RecognizeOutcome::WaitingComments
+                } else {
+                    RecognizeOutcome::Done
+                };
+            }
+            Ok((false, fetched_comments)) => {
+                if fetched_comments && let Some(pending) = self.pending_playback.as_mut() {
+                    pending.waiting_comments = true;
+                }
+                fetched_comments
+            }
             Err(error) => {
                 self.notify(Notice::OperationFailed {
                     reason: error.message,
                 });
-                return;
+                return RecognizeOutcome::Done;
             }
-        }
+        };
+        let fallback = if fetched_comments {
+            RecognizeOutcome::WaitingComments
+        } else {
+            RecognizeOutcome::Done
+        };
         if !self.state.preferences.auto_match {
-            return;
+            return fallback;
         }
         if erika_store::plugin_sources::is_address(&source.url) {
             // The opaque address is not a filename, and an upstream fingerprint
             // is not evidence that this device read the file's bytes.
-            if let Err(error) = self.recognize_source_item(&source.url) {
-                self.notify(Notice::OperationFailed {
-                    reason: error.message,
-                });
-            }
-            return;
+            return match self.recognize_source_item(&source.url) {
+                Ok(true) => RecognizeOutcome::WaitingRecognition,
+                Ok(false) => fallback,
+                Err(error) => {
+                    self.notify(Notice::OperationFailed {
+                        reason: error.message,
+                    });
+                    fallback
+                }
+            };
         }
         let name = source.file_name().unwrap_or_default();
         let directory = bern::files::file_path(&source.url)
@@ -406,12 +438,12 @@ impl ErikaEngine {
         })();
         let (job, danmaku_revision) = match prepared {
             Ok(Some(value)) => value,
-            Ok(None) => return,
+            Ok(None) => return fallback,
             Err(error) => {
                 self.notify(Notice::OperationFailed {
                     reason: error.message,
                 });
-                return;
+                return fallback;
             }
         };
         let (revision, client, inbox) = (
@@ -444,11 +476,15 @@ impl ErikaEngine {
                 waker.wake();
             }
         });
+        RecognizeOutcome::WaitingRecognition
     }
 
     /// Content identity and danmaku identity are intentionally read separately.
     /// A metadata outage must not hide an already recognised danmaku track.
-    pub(super) fn show_catalog(&mut self, file: FileId) -> erika_store::catalog::Result<bool> {
+    pub(super) fn show_catalog(
+        &mut self,
+        file: FileId,
+    ) -> erika_store::catalog::Result<(bool, bool)> {
         let clock = (
             file,
             self.db.catalog_revision(file)?,
@@ -456,6 +492,7 @@ impl ErikaEngine {
         );
         let binding = self.db.catalog_binding(file)?;
         let decided = binding.is_some();
+        let mut fetched_comments = false;
         self.read_playing_content(clock, binding)?;
         if let Some(danmaku) = self.db.catalog_danmaku(file)? {
             let changed = self
@@ -481,19 +518,19 @@ impl ErikaEngine {
                     _ => None,
                 };
                 if track_changed && let Some(id) = self.episode_playing {
-                    self.fetch_online_danmaku(id);
+                    fetched_comments = self.fetch_online_danmaku(id);
                 }
             }
         } else if self.danmaku_binding.is_some() {
             self.reset_file_danmaku();
             self.apply_danmaku();
         }
-        Ok(decided)
+        Ok((decided, fetched_comments))
     }
 
-    pub(super) fn fetch_online_danmaku(&mut self, id: i64) {
-        if !self.state.features.danmaku || !self.state.video {
-            return;
+    pub(super) fn fetch_online_danmaku(&mut self, id: i64) -> bool {
+        if !self.state.features.danmaku || (!self.state.video && self.pending_playback.is_none()) {
+            return false;
         }
         let remote = self
             .current_source()
@@ -501,7 +538,7 @@ impl ErikaEngine {
             .filter(|s| erika_dandanplay::remote::comment_url(s).is_some())
             .filter(|_| erika_dandanplay::token().is_none());
         if id > 0 && erika_dandanplay::token().is_none() && remote.is_none() {
-            return;
+            return false;
         }
         self.danmaku_generation += 1;
         let request_generation = self.danmaku_generation;
@@ -528,6 +565,7 @@ impl ErikaEngine {
                 waker.wake();
             }
         });
+        true
     }
 
     /// Take in what matching and fetching danmaku came back with.
@@ -568,19 +606,32 @@ impl ErikaEngine {
                         .catalog_finish_resolution(&job, danmaku_revision, &report)
                     {
                         Ok(_) => {
-                            if let Err(error) = self.show_catalog(file) {
-                                self.notify(Notice::OperationFailed {
-                                    reason: error.message,
-                                });
+                            match self.show_catalog(file) {
+                                Ok((decided, fetched_comments)) => {
+                                    self.on_preload_recognition_finished(
+                                        file,
+                                        decided,
+                                        fetched_comments,
+                                    );
+                                }
+                                Err(error) => {
+                                    self.notify(Notice::OperationFailed {
+                                        reason: error.message,
+                                    });
+                                    self.on_preload_recognition_finished(file, false, false);
+                                }
                             }
                             #[cfg(feature = "bern-module-anime")]
                             erika_anime_protocol::anime::calls::history_changed();
                             #[cfg(feature = "bern-module-library")]
                             erika_library_protocol::library::calls::history_changed();
                         }
-                        Err(error) => self.notify(Notice::OperationFailed {
-                            reason: error.message,
-                        }),
+                        Err(error) => {
+                            self.notify(Notice::OperationFailed {
+                                reason: error.message,
+                            });
+                            self.on_preload_recognition_finished(file, false, false);
+                        }
                     }
                 }
                 Found::Comments {
@@ -596,16 +647,29 @@ impl ErikaEngine {
                     {
                         continue;
                     }
-                    match result {
-                        Ok((json, count)) => {
-                            if let Some(kernel) = self.kernel().filter(|_| self.state.video) {
-                                if self.load_danmaku(&kernel, "弹弹play", &json).is_ok() {
-                                    self.online_danmaku_count = count;
-                                    self.add_danmaku_source("弹弹play".into(), count);
-                                }
+                    if self.pending_playback.is_some() {
+                        match result {
+                            Ok((json, count)) => {
+                                self.preloaded_danmaku = Some((json, count));
+                                self.on_preload_comments_finished(Ok(count));
+                            }
+                            Err(reason) => {
+                                self.notify(Notice::OperationFailed { reason });
+                                self.on_preload_comments_finished(Err(()));
                             }
                         }
-                        Err(reason) => self.notify(Notice::OperationFailed { reason }),
+                    } else {
+                        match result {
+                            Ok((json, count)) => {
+                                if let Some(kernel) = self.kernel().filter(|_| self.state.video) {
+                                    if self.load_danmaku(&kernel, "弹弹play", &json).is_ok() {
+                                        self.online_danmaku_count = count;
+                                        self.add_danmaku_source("弹弹play".into(), count);
+                                    }
+                                }
+                            }
+                            Err(reason) => self.notify(Notice::OperationFailed { reason }),
+                        }
                     }
                 }
                 Found::Search { revision, result } => {

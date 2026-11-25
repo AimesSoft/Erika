@@ -15,6 +15,15 @@ pub(super) struct Current {
     progress: progress::Progress,
 }
 
+impl Current {
+    pub(super) fn poster_url(&self) -> Option<String> {
+        self.root
+            .as_ref()
+            .and_then(|root| root.artwork.poster.as_ref().or(root.artwork.backdrop.as_ref()))
+            .and_then(|asset| asset.url(None, 500).ok())
+    }
+}
+
 impl ErikaEngine {
     pub(super) fn read_playing_content(
         &mut self,
@@ -115,6 +124,7 @@ impl ErikaEngine {
             self.state.subtitle = note;
             self.state.player.episode = episode;
         }
+        self.refresh_loading_cover();
         if let Some(source) = self.current_source().cloned() {
             self.publish_queue(&source);
         }

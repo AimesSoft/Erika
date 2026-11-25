@@ -23,7 +23,7 @@ use erika_anime_protocol::anime::{self, BackTo};
 use erika_anime_ui::{details, details_props, stage_column, stage_column_props};
 #[cfg(feature = "bern-module-downloads")]
 use erika_downloads_protocol::downloads;
-use erika_protocol::erika::{self, PlaybackSpeed};
+use erika_protocol::erika::{self, AppIcon, PlaybackSpeed};
 #[cfg(feature = "bern-module-account")]
 mod account;
 #[cfg(feature = "bern-module-account")]
@@ -55,10 +55,13 @@ style! {
     Sidebar { background: color(light: "#FAFAFA", dark: "#171717") }
     #[target(macos, ios, tvos)]
     Detail { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
-    // A page a navigation stack pushes over the detail: the stack draws its
-    // own background behind its pages otherwise. A television keeps its own.
+    // A page a navigation stack pushes over the detail (e.g. Account Sync
+    // settings subpages): matches the light/dark detail page background.
     #[target(macos, ios, windows, linux, android, browser)]
-    Stack.detail_page { background: color(light: "#1E1E1E", dark: "#1E1E1E"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
+    Stack.detail_page { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
+    // Full-window dark media details page over the main shell.
+    #[target(macos, ios, windows, linux, android, browser)]
+    Stack.media_detail_page { background: color(light: "#1E1E1E", dark: "#1E1E1E"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
     #[target(browser, windows, linux, android)]
     Stack.app_window { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
 
@@ -96,20 +99,53 @@ style! {
     }
 
     Stack.player_black { background: color(light: "#000000", dark: "#000000"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
-    // Shadow bare content and seek bars; native glass controls keep their own
-    // system appearance. Opaque, bright tones stay readable over the picture.
+    Stack.player_loading_backdrop { background: color(light: "#141416", dark: "#141416"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
+    Stack.player_loading_card {
+        background: color(light: "#242429", dark: "#242429"),
+        foreground: color(light: "#FFFFFF", dark: "#FFFFFF"),
+        corner: 16,
+        shadow: shadow(24, y: 10, opacity: 0.45),
+    }
+    Stack.player_loading_cover {
+        background: color(light: "#2E2E34", dark: "#2E2E34"),
+        foreground: color(light: "#A0A0AA", dark: "#A0A0AA"),
+        corner: 10,
+    }
+    // Two-layer pure element shadows (tight contact shadow + soft ambient halo)
+    // keep bare white text, seek bars, and icons crisp even over pure white
+    // frames without adding dark gradient scrims over the picture.
     #[target(macos, ios, tvos, browser, windows, linux)]
-    Stack.player_overlay { shadow: shadow(3, y: 1, opacity: 0.45) }
+    Stack.player_ambient { shadow: shadow(11, y: 2, opacity: 0.48) }
+    #[target(macos, ios, tvos, browser, windows, linux)]
+    Stack.player_overlay { shadow: shadow(3.5, y: 0.8, opacity: 0.90) }
     // Control groups without glass (Windows' bare glyphs, Linux's faint
-    // capsule): what they show casts the same shadow over the picture.
+    // capsule): what they show casts the same two-layer shadow over the picture.
     #[target(windows, linux)]
-    Stack.player_buttons { shadow: shadow(3, y: 1, opacity: 0.45) }
+    Stack.player_buttons_ambient { shadow: shadow(11, y: 2, opacity: 0.48) }
+    #[target(windows, linux)]
+    Stack.player_buttons { shadow: shadow(3.5, y: 0.8, opacity: 0.90) }
     // The player's control groups side by side: apart where each is a
     // capsule of its own, as close as the buttons in one where they are
     // bare glyphs (Windows).
     Row.player_groups { gap: 12 }
     #[target(windows)]
     Row.player_groups { gap: 2 }
+    // Desktop player top bar: on Windows it sits flush with the window's top
+    // edge so its buttons share the native title-bar strip with the system
+    // caption buttons; other desktops keep the 8 pt top clearance and 12 pt
+    // horizontal inset.
+    Column.player_top_wrap { padding_x: 12, padding_y: 8 }
+    #[target(windows)]
+    Column.player_top_wrap { padding_x: 0, padding_y: 0 }
+    Row.player_top_row { height: 40 }
+    #[target(windows)]
+    Row.player_top_row { height: fit }
+    Row.player_top_left { gap: 12 }
+    #[target(windows)]
+    Row.player_top_left { gap: 4 }
+    Column.player_title { padding_x: 4, padding_y: 0 }
+    #[target(windows)]
+    Column.player_title { padding_x: 4, padding_y: 4 }
     Stack.player_text { foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
     Stack.player_accent { foreground: accent }
     Stack.player_secondary { foreground: color(light: "#E6E6EB", dark: "#E6E6EB") }
@@ -131,11 +167,11 @@ style! {
     // episode navigation; enabled still controls whether an action can run.
     IconButton.player_plain { foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, pressed: scale(0.94, press), disabled: foreground(color(light: "#FFFFFF", dark: "#FFFFFF")) }
     #[target(macos, ios, tvos, browser, windows, linux)]
-    Button.player_plain { shadow: shadow(3, y: 1, opacity: 0.45) }
+    Button.player_plain { shadow: shadow(3.5, y: 0.8, opacity: 0.90) }
     #[target(macos, ios, tvos, browser, windows, linux)]
-    IconButton.player_plain { shadow: shadow(3, y: 1, opacity: 0.45) }
+    IconButton.player_plain { shadow: shadow(3.5, y: 0.8, opacity: 0.90) }
     #[target(macos, ios, tvos, browser, windows, linux)]
-    IconButton.transport { shadow: shadow(3, y: 1, opacity: 0.45) }
+    IconButton.transport { shadow: shadow(3.5, y: 0.8, opacity: 0.90) }
     Stack.player_gold { foreground: color(light: "#FFD24A", dark: "#FFD24A") }
     Stack.player_cyan { foreground: color(light: "#8EE3FF", dark: "#8EE3FF") }
     Stack.player_pink { foreground: color(light: "#FFB3C7", dark: "#FFB3C7") }
@@ -145,7 +181,7 @@ style! {
     Button.remote_surface { hover: none, pressed: none, focus: none }
     IconButton.player_primary { font_size: 38, foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, hover: scale(1.08, snappy), pressed: scale(0.90, press), settle: jelly }
     #[target(macos, ios, tvos, browser, windows, linux)]
-    IconButton.player_primary { shadow: shadow(3, y: 1, opacity: 0.45) }
+    IconButton.player_primary { shadow: shadow(5, y: 1, opacity: 0.85) }
     IconButton.transport { font_size: 16, foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, pressed: scale(0.94, press), disabled: foreground(color(light: "#FFFFFF", dark: "#FFFFFF")) }
     Stack.onboarding_art { background: color(light: "#232A52", dark: "#232A52") }
     // Cards and groups take the system's neutral fill (P2); only the
@@ -772,6 +808,13 @@ pub fn main_window(
     ui! {
         Stack(variant: app_window, reduce_motion: app.preferences.reduce_motion) {
             Timer(interval: 0.25, enabled: app.playing) => app.player_tick()
+            // Expire transient toasts once their display duration ends so
+            // newly mounted windows/overlays never replay stale notices.
+            Timer(interval: 1.0, enabled: app.has_notice) => app.expire_notice()
+            // Open the settings window whenever global search targets a page.
+            if app.settings_open_revision > 0 {
+                Watch(value: app.settings_open_revision) => windows.settings.open()
+            }
             // The frame that flew in has landed by now, under the player.
             Timer(interval: 0.6, enabled: app.player.arriving) => app.arrive()
             if build.modules.account && app.features.account {
@@ -846,8 +889,12 @@ pub fn main_shell(
                         } else {
                         // Match the navigation icon centers and title column.
                         Row(variant: brand, align: center) {
-                            // `.x-brand img`: the logo in its own colors.
-                            Image(source: "design/assets/icon.png", width: 22, height: 22, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                            // `.x-brand img`: follows the chosen app icon.
+                            if app.app_icon == AppIcon::Skin {
+                                Image(source: "design/brand/erika-icon-export/skin/logo/erika-logo-icon-128.png", width: 22, height: 22, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                            } else {
+                                Image(source: "design/assets/icon.png", width: 22, height: 22, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                            }
                             Text(content: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, style: headline)
                         }
                         }
@@ -907,8 +954,8 @@ pub fn main_shell(
             }
             }
             if build.modules.anime && anime.opened != "" && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
-                Stack(variant: detail_page, appearance: dark, tint: text.primary, align: top_leading, appear: detail_in, disappear: detail_out) {
-                    desktop_toolbar(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+                Stack(variant: media_detail_page, appearance: dark, tint: text.primary, align: top_leading, appear: detail_in, disappear: detail_out) {
+                    detail_toolbar(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
                     details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
                 }
             }
@@ -942,7 +989,7 @@ pub fn main_shell(
     }
 }
 
-/// Desktop actions stay available both beside the sidebar and above full-window details.
+/// Desktop actions beside the sidebar; hidden while full-window details cover the shell.
 #[component]
 pub fn desktop_toolbar(
     app: erika::Client,
@@ -952,9 +999,6 @@ pub fn desktop_toolbar(
 ) -> impl View {
     ui! {
         Toolbar {
-            if build.modules.anime && anime.opened != "" && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
-                IconButton(id: back, icon: "chevron.left", label: anime.back, shortcut: app.keys.back) => anime.close()
-            }
             Spacer
             Search(id: search, value: draft.query, style: palette, display: icon, width: 640, height: 480, panel_prompt: tr! { "zh-Hans" => "搜索番剧、剧集、设置和操作", "en" => "Search shows, episodes, settings and actions" }, prompt: tr! { "zh-Hans" => "搜索", "en" => "Search" }, shortcut: app.keys.search) {
                 search_results(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, phone: false)
@@ -962,6 +1006,22 @@ pub fn desktop_toolbar(
             if !window.rail {
                 IconButton(id: open_file, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "folder", pick: draft.file, files: "video", shortcut: app.keys.open_file) => app.open_file(draft.file)
             }
+        }
+    }
+}
+
+/// Full-window media details only keep the leading back button.
+#[component]
+pub fn detail_toolbar(
+    app: erika::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+) -> impl View {
+    ui! {
+        Toolbar {
+            if build.modules.anime {
+                IconButton(id: back, icon: "chevron.left", label: anime.back, shortcut: app.keys.back) => anime.close()
+            }
+            Spacer
         }
     }
 }

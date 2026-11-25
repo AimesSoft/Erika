@@ -281,8 +281,13 @@ impl ErikaEngine {
         self.file = file;
         self.media_playing = entry.media;
         self.publish_queue(&entry.source);
-        self.load(Some(entry.source.clone()), start);
-        self.recognize(&entry.source, fingerprint);
+        self.begin_playback(
+            Some(entry.source.clone()),
+            start,
+            bern::current_entry(),
+            fingerprint,
+            true,
+        );
         Ok(())
     }
 

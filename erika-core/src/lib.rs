@@ -105,6 +105,11 @@ pub struct ErikaEngine {
     match_preview_queue: std::collections::VecDeque<i64>,
     match_previews_active: usize,
     online_danmaku_count: usize,
+    pending_playback: Option<player::PendingPlayback>,
+    preloaded_danmaku: Option<(String, usize)>,
+    loading_step_seq: i64,
+    loading_started_at: Option<web_time::Instant>,
+    notice_at: Option<web_time::Instant>,
 }
 
 /// Run `work` on another thread; what it returns waits in `inbox`, and the
@@ -199,6 +204,11 @@ impl Default for ErikaEngine {
             match_preview_queue: Default::default(),
             match_previews_active: 0,
             online_danmaku_count: 0,
+            pending_playback: None,
+            preloaded_danmaku: None,
+            loading_step_seq: 0,
+            loading_started_at: None,
+            notice_at: None,
             feedback_remaining: 0.0,
             saved_modules: None,
             pending_modules: None,
@@ -229,7 +239,10 @@ impl Default for ErikaEngine {
                 feature_preview_revision: 0,
                 preset: OnboardingPreset::All,
                 notice: None,
+                has_notice: false,
                 notice_revision: 0,
+                settings_page: SettingsPage::General,
+                settings_open_revision: 0,
                 plugins: Vec::new(),
                 plugin_category: PluginCategory::All,
                 plugin_tab: PluginTab::Market,
@@ -351,6 +364,8 @@ impl ErikaEngine {
             self.save_history();
         }
         self.cancel_resolution();
+        self.clear_loading();
+        self.preloaded_danmaku = None;
         self.logical_source = None;
         self.file = None;
         self.still_path = None;
@@ -479,6 +494,7 @@ impl erika::Commands for ErikaEngine {
                 self.apply_danmaku();
             }
             "auto_match" => self.state.preferences.auto_match = value,
+            "load_danmaku_before_play" => self.state.preferences.load_danmaku_before_play = value,
             "sync_storage" => self.state.preferences.sync_storage = value,
             "merge_seasons" => self.state.preferences.merge_seasons = value,
             _ => {
@@ -791,10 +807,13 @@ impl erika::Commands for ErikaEngine {
         if let Some(source) = &recent.source {
             self.prepare_queue(source);
         }
-        self.load(recent.source.clone(), start);
-        if let Some(source) = &recent.source {
-            self.recognize(source, fingerprint);
-        }
+        self.begin_playback(
+            recent.source.clone(),
+            start,
+            bern::current_entry(),
+            fingerprint,
+            true,
+        );
         Ok(())
     }
 
@@ -816,6 +835,8 @@ impl erika::Commands for ErikaEngine {
         self.state.expanded = false;
         self.state.paused = false;
         self.state.player.panel = false;
+        self.clear_loading();
+        self.preloaded_danmaku = None;
         self.unload();
         Ok(())
     }
@@ -875,8 +896,13 @@ impl erika::Commands for ErikaEngine {
         self.prepare_queue(&source);
         // The caller selected a canonical chapter. Saved progress must never
         // replace its absolute timestamp (including when duration is unknown).
-        self.load(Some(source.clone()), start);
-        self.recognize(&source, fingerprint);
+        self.begin_playback(
+            Some(source.clone()),
+            start,
+            bern::current_entry(),
+            fingerprint,
+            true,
+        );
         Ok(())
     }
 
@@ -908,8 +934,13 @@ impl erika::Commands for ErikaEngine {
         }
         self.file = file;
         self.prepare_queue(&source);
-        self.load(Some(source.clone()), start);
-        self.recognize(&source, fingerprint);
+        self.begin_playback(
+            Some(source.clone()),
+            start,
+            bern::current_entry(),
+            fingerprint,
+            true,
+        );
         Ok(())
     }
 
@@ -940,10 +971,13 @@ impl erika::Commands for ErikaEngine {
         );
         self.file = file;
         self.prepare_queue(&source);
-        self.load(Some(source.clone()), start);
-        if !downloading {
-            self.recognize(&source, fingerprint);
-        }
+        self.begin_playback(
+            Some(source.clone()),
+            start,
+            bern::current_entry(),
+            fingerprint,
+            !downloading,
+        );
         Ok(())
     }
 
@@ -998,7 +1032,7 @@ impl erika::Commands for ErikaEngine {
 
     fn minimize(&mut self) -> Result<(), CommandError> {
         self.require_playing()?;
-        self.capture_still();
+        self.capture_still_now();
         self.state.expanded = false;
         self.state.player.panel = false;
         self.state.player.arriving = false;
@@ -1009,6 +1043,7 @@ impl erika::Commands for ErikaEngine {
         self.require_playing()?;
         // The mini player's picture flies into the frame.
         if !self.state.expanded {
+            self.capture_still_now();
             self.state.player.flies_in = true;
             self.state.player.arriving = true;
         }
@@ -1029,6 +1064,8 @@ impl erika::Commands for ErikaEngine {
         self.state.playing = false;
         self.state.expanded = false;
         self.state.player.arriving = false;
+        self.clear_loading();
+        self.preloaded_danmaku = None;
         self.unload();
         Ok(())
     }
@@ -1185,6 +1222,14 @@ impl erika::Commands for ErikaEngine {
     }
     fn block_media_match(&mut self) -> Result<(), CommandError> {
         self.block_catalog_match()
+    }
+    fn skip_danmaku_preload(&mut self) -> Result<(), CommandError> {
+        if self.pending_playback.is_some() {
+            self.finish_pending_playback(false);
+        } else if self.state.player.loading.active {
+            self.clear_loading();
+        }
+        Ok(())
     }
     fn send_danmaku(&mut self, text: String) -> Result<(), CommandError> {
         self.require_playing()?;
@@ -1350,6 +1395,22 @@ impl erika::Commands for ErikaEngine {
         self.db
             .set_setting("appearance.icon", Some(&format!("{icon:?}")));
         self.state.app_icon = icon;
+        Ok(())
+    }
+    fn expire_notice(&mut self) -> Result<(), CommandError> {
+        if self
+            .notice_at
+            .is_some_and(|at| at.elapsed() >= std::time::Duration::from_secs(3))
+        {
+            self.state.notice = None;
+            self.state.has_notice = false;
+            self.notice_at = None;
+        }
+        Ok(())
+    }
+    fn open_settings_page(&mut self, page: SettingsPage) -> Result<(), CommandError> {
+        self.state.settings_page = page;
+        self.state.settings_open_revision += 1;
         Ok(())
     }
     fn open_url(&mut self, url: String) -> Result<(), CommandError> {

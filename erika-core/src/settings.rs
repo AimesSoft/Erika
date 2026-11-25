@@ -104,6 +104,7 @@ pub fn default_preferences() -> Preferences {
         hardware_decode: true,
         show_danmaku: true,
         auto_match: true,
+        load_danmaku_before_play: false,
         sync_storage: true,
         merge_seasons: false,
         startup: StartupPage::Home,
@@ -242,16 +243,14 @@ impl ErikaEngine {
 impl ErikaEngine {
     pub(crate) fn notify(&mut self, notice: Notice) {
         self.state.notice = Some(notice);
+        self.state.has_notice = true;
         self.state.notice_revision += 1;
+        self.notice_at = Some(web_time::Instant::now());
     }
 }
 impl erika::Queries for ErikaEngine {
     fn search_actions(&self, text: String, answer: bern::prelude::Answer<erika::SearchActions>) {
-        answer.ok(crate::search::actions(
-            &text,
-            self.state.features.anime,
-            self.state.features.danmaku,
-        ));
+        answer.ok(crate::search::actions(&text, &self.state.features));
     }
 
     fn find_settings(&self, text: String, answer: Answer<Vec<SettingResult>>) {

@@ -100,6 +100,7 @@ fn chapters(source: &[Chapter], duration: f64) -> Vec<MediaChapter> {
                 start: chapter.start,
                 end,
                 at,
+                end_at: next_at,
                 label_width: ((next_at - at) * 1074.0 - 6.0).clamp(0.0, 180.0),
                 kind: kind(&chapter.title),
             }

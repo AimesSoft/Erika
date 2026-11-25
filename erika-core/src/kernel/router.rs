@@ -10,6 +10,7 @@ use erika_protocol::erika::Enhancement;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 pub struct Router {
     native: Arc<dyn Kernel>,
@@ -175,6 +176,9 @@ impl Kernel for Router {
     }
     fn capture(&self, path: &Path, width: Option<u32>) {
         self.active().capture(path, width);
+    }
+    fn capture_now(&self, path: &Path, width: Option<u32>, timeout: Duration) -> bool {
+        self.active().capture_now(path, width, timeout)
     }
     fn close(&self) {
         self.active().close();

@@ -58,6 +58,9 @@ impl Runtime {
             .clone()
             .unwrap_or_else(|| Client::built_in("zh-CN").expect("built-in metadata address"))
     }
+    pub(super) fn is_idle(&self) -> bool {
+        self.running.is_empty()
+    }
 }
 /// What a calendar entry says about itself once its work is known: the TMDB
 /// season it airs as (from its own dates) and its own provider subjects.
@@ -329,52 +332,57 @@ impl AnimeEngine {
         }
     }
     pub(super) fn project_calendar(&mut self, calendar: &mut season::Season) {
-        self.restore_metadata();
-        let images = self.db.catalog_images();
-        let map = self
-            .season
-            .iter()
-            .filter_map(|i| {
-                let key = source_key(i.anime_id);
-                let target = self.resolved_source(&key)?;
-                let node = self.db.catalog_node(&target).ok().flatten()?;
-                let airing = if node.kind == Kind::Tv {
-                    let children = self.db.catalog_children(&node.id).unwrap_or_default();
-                    self.calendar_season(&node.id, &children)
-                } else {
-                    None
-                };
-                let (title, poster) = if let Some(season_node) = airing
-                    .as_ref()
-                    .filter(|s| s.season_number.is_some_and(|n| n > 1))
-                {
-                    let (_, bgm_cn, bgm_cover) =
-                        reviews::cached_season_meta(&self.db, &season_node.id);
-                    let n = season_node.season_number.unwrap_or(2);
-                    let title = bgm_cn
-                        .or_else(|| {
-                            let raw = i.anime_title.trim();
-                            (!raw.is_empty() && content::is_chinese(raw)).then(|| raw.to_string())
-                        })
-                        .unwrap_or_else(|| format!("{} 第 {n} 季", node.title));
-                    let poster = if let Some(p) = season_node.artwork.poster.as_ref() {
-                        images.url(Some(p), 780)
-                    } else if let Some(cover) = bgm_cover {
-                        cover
+        if self.calendar_projection.is_none() {
+            self.restore_metadata();
+            let images = self.db.catalog_images();
+            let built = self
+                .season
+                .iter()
+                .filter_map(|i| {
+                    let key = source_key(i.anime_id);
+                    let target = self.resolved_source(&key)?;
+                    let node = self.db.catalog_node(&target).ok().flatten()?;
+                    let airing = if node.kind == Kind::Tv {
+                        let children = self.db.catalog_children(&node.id).unwrap_or_default();
+                        self.calendar_season(&node.id, &children)
                     } else {
-                        images.url(node.artwork.poster.as_ref(), 780)
+                        None
                     };
-                    (title, poster)
-                } else {
-                    let poster_ref = airing
+                    let (title, poster) = if let Some(season_node) = airing
                         .as_ref()
-                        .and_then(|s| s.artwork.poster.as_ref())
-                        .or(node.artwork.poster.as_ref());
-                    (node.title.clone(), images.url(poster_ref, 780))
-                };
-                Some((key, (node.id.0, title, poster)))
-            })
-            .collect::<HashMap<_, _>>();
+                        .filter(|s| s.season_number.is_some_and(|n| n > 1))
+                    {
+                        let (_, bgm_cn, bgm_cover) =
+                            reviews::cached_season_meta(&self.db, &season_node.id);
+                        let n = season_node.season_number.unwrap_or(2);
+                        let title = bgm_cn
+                            .or_else(|| {
+                                let raw = i.anime_title.trim();
+                                (!raw.is_empty() && content::is_chinese(raw))
+                                    .then(|| raw.to_string())
+                            })
+                            .unwrap_or_else(|| format!("{} 第 {n} 季", node.title));
+                        let poster = if let Some(p) = season_node.artwork.poster.as_ref() {
+                            images.url(Some(p), 780)
+                        } else if let Some(cover) = bgm_cover {
+                            cover
+                        } else {
+                            images.url(node.artwork.poster.as_ref(), 780)
+                        };
+                        (title, poster)
+                    } else {
+                        let poster_ref = airing
+                            .as_ref()
+                            .and_then(|s| s.artwork.poster.as_ref())
+                            .or(node.artwork.poster.as_ref());
+                        (node.title.clone(), images.url(poster_ref, 780))
+                    };
+                    Some((key, (node.id.0, title, poster)))
+                })
+                .collect::<HashMap<_, _>>();
+            self.calendar_projection = Some(built);
+        }
+        let map = self.calendar_projection.as_ref().unwrap();
         let project = |row: &mut anime::Broadcast| {
             if let Some((id, title, poster)) = map.get(&row.id) {
                 row.id = id.clone();

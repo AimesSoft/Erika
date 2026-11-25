@@ -45,7 +45,7 @@ pub fn player(
             if window.tv {
                 Stack(under_bars: true) {
                     ScaleBox(width: 1280, height: 720) {
-                        player_tv_scene(app: app, players: players, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.saying)
+                        player_tv_scene(app: app, players: players, shown: !app.player.loading.active && (!window.idle || app.paused || app.matching.open || app.player.panel || draft.saying))
                     }
                 }
             } else if window.tabletop {
@@ -53,7 +53,7 @@ pub fn player(
             } else if window.short || window.compact || window.medium {
                 Stack(under_bars: true, variant: player_black) {
                     ScaleBox(width: 844, height: 390) {
-                        player_scene(app: app, players: players, windows: windows, shown: (if window.touch { !draft.touch_hidden } else { !window.idle }) || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
+                        player_scene(app: app, players: players, windows: windows, shown: !app.player.loading.active && ((if window.touch { !draft.touch_hidden } else { !window.idle }) || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open))
                     }
                 }
             } else {
@@ -100,8 +100,11 @@ pub fn player(
                             MenuItem(id: ctx_close, label: tr! { "zh-Hans" => "停止播放", "en" => "Stop playback" }, icon: "xmark") => app.close_player()
                         }
                     } => app.toggle_pause()
-                    player_desktop_hud(app: app, windows: windows, shown: !window.idle || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
+                    player_desktop_hud(app: app, windows: windows, shown: !app.player.loading.active && (!window.idle || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open))
                 }
+            }
+            if app.player.loading.active {
+                player_loading_overlay(app: app)
             }
             if let Some(notice) = app.notice {
                 Toast(content: notice, key: app.notice_revision, duration: 3)
@@ -166,8 +169,7 @@ pub fn player_desktop_hud(
     ui! {
         Column(gap: 0) {
             if shown {
-                Column(gap: 0, padding_x: 12, appear: top_bar_in, disappear: top_bar_out) {
-                    Canvas(height: 8)
+                Column(gap: 0, variant: player_top_wrap, appear: top_bar_in, disappear: top_bar_out) {
                     player_top(app: app, desktop: true)
                 }
             }
@@ -520,11 +522,13 @@ pub fn player_overlays(app: erika::Client) -> impl View {
         Stack(width: 1280, height: 720, align: top_leading) {
             if app.player.feedback {
                 Positioned(x: 596, y: 316, width: 88, height: 88, appear: player_feedback_in, disappear: fade) {
-                    Stack(variant: player_overlay) {
-                        if app.paused {
-                            Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, icon: "pause.fill", display: icon, font_size: 44) }
-                        } else {
-                            Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "播放", "en" => "Play" }, icon: "play.fill", display: icon, font_size: 44) }
+                    Stack(variant: player_ambient) {
+                        Stack(variant: player_overlay) {
+                            if app.paused {
+                                Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, icon: "pause.fill", display: icon, font_size: 44) }
+                            } else {
+                                Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "播放", "en" => "Play" }, icon: "play.fill", display: icon, font_size: 44) }
+                            }
                         }
                     }
                 }
@@ -534,52 +538,54 @@ pub fn player_overlays(app: erika::Client) -> impl View {
 }
 
 #[component]
-pub fn player_top(app: erika::Client, desktop: bool, #[session] draft: PlayerDraft) -> impl View {
+pub fn player_top_back_shortcut(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
     ui! {
-        Row(gap: 0, height: if desktop { 36 } else { 64 }, align: center) {
-            if draft.tracks_open {
-                Shortcut(key: app.keys.back) => draft.tracks_open.set(false)
-            } else if draft.rate_open {
-                Shortcut(key: app.keys.back) => draft.rate_open.set(false)
-            } else if draft.danmaku_open {
-                Shortcut(key: app.keys.back) => draft.danmaku_open.set(false)
-            } else if draft.composer_open {
-                Shortcut(key: app.keys.back) => draft.composer_open.set(false)
-            } else if draft.volume_open {
-                Shortcut(key: app.keys.back) => draft.volume_open.set(false)
-            } else if app.player.panel {
-                Shortcut(key: app.keys.back) => app.player_panel(false)
-            } else if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
-                Shortcut(key: app.keys.back) => app.return_to_frame()
-            } else {
-                Shortcut(key: app.keys.back) => app.minimize()
-            }
-            if desktop && !window.fullscreen {
-                WindowButtons
-            }
-            Row(gap: 12, align: center) {
-                Stack(variant: player_buttons) {
-                    ControlGroup(height: if desktop { 36 } else { 40 }) {
-                        // With no sidebar to shrink into, the picture goes back into
-                        // the empty frame (design 10.2).
-                        if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
-                            IconButton(id: back_to_frame, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }) => app.return_to_frame()
-                        } else {
-                            IconButton(id: back, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }) => app.minimize()
-                        }
-                    }
-                }
-                Stack(variant: player_overlay) {
-                    Column(gap: 1, padding_x: 4) {
-                        Stack(variant: player_text) { Text(content: app.title, style: title3, lines: 1) }
-                        Stack(variant: player_secondary) { Text(content: app.subtitle, style: caption) }
-                    }
-                }
-            }
-            Spacer
+        if draft.tracks_open {
+            Shortcut(key: app.keys.back) => draft.tracks_open.set(false)
+        } else if draft.rate_open {
+            Shortcut(key: app.keys.back) => draft.rate_open.set(false)
+        } else if draft.danmaku_open {
+            Shortcut(key: app.keys.back) => draft.danmaku_open.set(false)
+        } else if draft.composer_open {
+            Shortcut(key: app.keys.back) => draft.composer_open.set(false)
+        } else if draft.volume_open {
+            Shortcut(key: app.keys.back) => draft.volume_open.set(false)
+        } else if app.player.panel {
+            Shortcut(key: app.keys.back) => app.player_panel(false)
+        } else if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
+            Shortcut(key: app.keys.back) => app.return_to_frame()
+        } else {
+            Shortcut(key: app.keys.back) => app.minimize()
+        }
+    }
+}
+
+#[component]
+pub fn player_top_back_button(app: erika::Client, desktop: bool) -> impl View {
+    ui! {
+        Stack(variant: player_buttons_ambient) {
             Stack(variant: player_buttons) {
-                ControlGroup(label: tr! { "zh-Hans" => "播放器工具", "en" => "Player tools" }, height: if desktop { 36 } else { 40 }) {
-                    PopoverButton(id: volume, icon: "speaker.wave.2", label: tr! { "zh-Hans" => "音量", "en" => "Volume" }, presented: draft.volume_open) {
+                ControlGroup(height: 40) {
+                    // With no sidebar to shrink into, the picture goes back into
+                    // the empty frame (design 10.2).
+                    if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
+                        IconButton(id: back_to_frame, icon: "chevron.left", font_size: 16, label: tr! { "zh-Hans" => "返回", "en" => "Back" }) => app.return_to_frame()
+                    } else {
+                        IconButton(id: back, icon: "chevron.left", font_size: 16, label: tr! { "zh-Hans" => "返回", "en" => "Back" }) => app.minimize()
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn player_top_tools(app: erika::Client, desktop: bool, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        Stack(variant: player_buttons_ambient) {
+            Stack(variant: player_buttons) {
+                ControlGroup(label: tr! { "zh-Hans" => "播放器工具", "en" => "Player tools" }, height: 40) {
+                    PopoverButton(id: volume, icon: "speaker.wave.2", font_size: 16, label: tr! { "zh-Hans" => "音量", "en" => "Volume" }, presented: draft.volume_open) {
                         Stack(appearance: dark, tint: text.primary) {
                             Column(gap: 12, width: 240, padding: 8) {
                                 Row(align: center) {
@@ -591,15 +597,66 @@ pub fn player_top(app: erika::Client, desktop: bool, #[session] draft: PlayerDra
                         }
                     }
                     if (build.modules.danmaku && app.features.danmaku) {
-                        PopoverButton(id: match_danmaku, icon: "link", label: tr! { "zh-Hans" => "弹幕匹配", "en" => "Match danmaku" }, open: app.matching.open) {
+                        PopoverButton(id: match_danmaku, icon: "link", font_size: 16, label: tr! { "zh-Hans" => "弹幕匹配", "en" => "Match danmaku" }, open: app.matching.open) {
                             Stack(appearance: dark, tint: text.primary) { player_matching(app: app) }
                         } => app.show_matching(app.matching.open)
                     }
-                    PopoverButton(id: settings, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }, open: app.player.panel) {
+                    PopoverButton(id: settings, icon: "slider.horizontal.3", font_size: 16, label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }, open: app.player.panel) {
                         Stack(appearance: dark, tint: text.primary) { player_panel(app: app) }
                     } => app.player_panel(app.player.panel)
-                    IconButton(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: app.keys.screenshot) => app.screenshot()
+                    IconButton(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", font_size: 16, shortcut: app.keys.screenshot) => app.screenshot()
                 }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn player_top(app: erika::Client, desktop: bool, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        if desktop {
+            Row(gap: 0, variant: player_top_row, align: top) {
+                player_top_back_shortcut(app: app)
+                if !window.fullscreen {
+                    WindowButtons
+                }
+                Row(variant: player_top_left, align: top) {
+                    player_top_back_button(app: app, desktop: true)
+                    Stack(variant: player_ambient) {
+                        Stack(variant: player_overlay) {
+                            Column(gap: 1, variant: player_title) {
+                                Stack(variant: player_text) { Text(content: app.title, style: title3, lines: 1) }
+                                Stack(variant: player_secondary) { Text(content: app.subtitle, style: caption) }
+                            }
+                        }
+                    }
+                }
+                Spacer
+                player_top_tools(app: app, desktop: true)
+                if !window.fullscreen {
+                    Stack(variant: player_buttons_ambient) {
+                        Stack(variant: player_buttons) {
+                            WindowButtons(edge: trailing)
+                        }
+                    }
+                }
+            }
+        } else {
+            Row(gap: 0, height: 64, align: center) {
+                player_top_back_shortcut(app: app)
+                Row(gap: 12, align: center) {
+                    player_top_back_button(app: app, desktop: false)
+                    Stack(variant: player_ambient) {
+                        Stack(variant: player_overlay) {
+                            Column(gap: 1, padding_x: 4) {
+                                Stack(variant: player_text) { Text(content: app.title, style: title3, lines: 1) }
+                                Stack(variant: player_secondary) { Text(content: app.subtitle, style: caption) }
+                            }
+                        }
+                    }
+                }
+                Spacer
+                player_top_tools(app: app, desktop: false)
             }
         }
     }
@@ -608,43 +665,47 @@ pub fn player_top(app: erika::Client, desktop: bool, #[session] draft: PlayerDra
 #[component]
 pub fn player_desktop_timeline(app: erika::Client) -> impl View {
     ui! {
-        Stack(variant: player_overlay) {
-            Column(gap: 2) {
-                Row(gap: 10, align: center) {
-                    Stack(variant: player_text) {
-                        Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2)
-                    }
-                    Stack(align: center) {
-                        Slider(id: position, appearance: dark, tint: text.primary, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }, label_hidden: true, current: app.progress, min: 0, max: 1) => app.seek(app.progress)
-                        if app.player.has_chapters && app.duration > 0.0 {
-                            Rail {
-                                ForEach(items: app.player.chapters, key: id) |chapter| {
-                                    Canvas(at: chapter.at, width: 2, height: 4) { Shape(kind: rect, fill: text.primary) }
-                                }
-                            }
-                        }
-                    }
-                    Stack(variant: player_secondary) {
-                        Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2)
-                    }
-                }
-                if app.player.has_chapters && app.duration > 0.0 {
+        Stack(variant: player_ambient) {
+            Stack(variant: player_overlay) {
+                Column(gap: 2) {
                     Row(gap: 10, align: center) {
-                        Canvas(width: 40, height: 1)
-                        Stack(height: 20) {
-                            Rail(anchor: start) {
-                                ForEach(items: app.player.chapters, key: id) |chapter| {
-                                    if chapter.label_width >= 24.0 {
-                                        Stack(at: chapter.at, width: chapter.label_width, height: 20, align: leading) {
-                                            Button(id: chapter, label: chapter.title, variant: player_picture) {
-                                                Stack(variant: player_text) { Text(content: chapter.title, style: caption, lines: 1) }
-                                            } => app.seek_chapter(chapter.id)
-                                        }
+                        Stack(variant: player_text, width: 44, align: trailing) {
+                            Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2)
+                        }
+                        Stack(align: center) {
+                            Slider(id: position, appearance: dark, tint: text.primary, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }, label_hidden: true, current: app.progress, min: 0, max: 1) => app.seek(app.progress)
+                            if app.player.has_chapters && app.duration > 0.0 {
+                                Rail {
+                                    ForEach(items: app.player.chapters, key: id) |chapter| {
+                                        Canvas(at: chapter.at, width: 2, height: 4) { Shape(kind: rect, fill: text.primary) }
                                     }
                                 }
                             }
                         }
-                        Canvas(width: 40, height: 1)
+                        Stack(variant: player_secondary, width: 44, align: leading) {
+                            Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2)
+                        }
+                    }
+                    if app.player.has_chapters && app.duration > 0.0 {
+                        Row(gap: 10, align: center) {
+                            Canvas(width: 44, height: 1)
+                            Stack(height: 20) {
+                                Rail(anchor: start) {
+                                    ForEach(items: app.player.chapters, key: id) |chapter| {
+                                        if chapter.end_at > chapter.at {
+                                            Stack(from: chapter.at, to: chapter.end_at, height: 20, align: leading) {
+                                                Row(gap: 0, padding_x: 3, align: center) {
+                                                    Button(id: chapter, label: chapter.title, variant: player_picture) {
+                                                        Stack(variant: player_text) { Text(content: chapter.title, style: caption, lines: 1) }
+                                                    } => app.seek_chapter(chapter.id)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Canvas(width: 44, height: 1)
+                        }
                     }
                 }
             }
@@ -655,34 +716,36 @@ pub fn player_desktop_timeline(app: erika::Client) -> impl View {
 #[component]
 pub fn player_timeline(app: erika::Client, width: f64, end: f64) -> impl View {
     ui! {
-        Stack(variant: player_overlay, align: top_leading) {
-            Positioned(x: 0, y: 0, width: width, height: 44) {
-                Slider(id: position, appearance: dark, tint: text.primary, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }, label_hidden: true, current: app.progress, min: 0, max: 1) => app.seek(app.progress)
-            }
-            if app.player.has_chapters && app.duration > 0.0 {
-                Positioned(x: 0, y: 20, width: width, height: 4) {
-                    Rail {
-                        ForEach(items: app.player.chapters, key: id) |chapter| {
-                            Canvas(at: chapter.at, width: 2, height: 4) { Shape(kind: rect, fill: text.primary) }
+        Stack(variant: player_ambient, align: top_leading) {
+            Stack(variant: player_overlay, align: top_leading) {
+                Positioned(x: 0, y: 0, width: width, height: 44) {
+                    Slider(id: position, appearance: dark, tint: text.primary, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }, label_hidden: true, current: app.progress, min: 0, max: 1) => app.seek(app.progress)
+                }
+                if app.player.has_chapters && app.duration > 0.0 {
+                    Positioned(x: 0, y: 20, width: width, height: 4) {
+                        Rail {
+                            ForEach(items: app.player.chapters, key: id) |chapter| {
+                                Canvas(at: chapter.at, width: 2, height: 4) { Shape(kind: rect, fill: text.primary) }
+                            }
                         }
                     }
-                }
-                Positioned(x: 0, y: 40, width: width, height: 24) {
-                    Rail(anchor: start) {
-                        ForEach(items: app.player.chapters, key: id) |chapter| {
-                            if chapter.label_width >= 24.0 {
-                                Stack(at: chapter.at, width: chapter.label_width, height: 24, align: leading) {
-                                    Button(id: chapter, label: chapter.title, variant: player_picture) {
-                                        Stack(variant: player_text) { Text(content: chapter.title, style: caption, lines: 1) }
-                                    } => app.seek_chapter(chapter.id)
+                    Positioned(x: 0, y: 40, width: width, height: 24) {
+                        Rail(anchor: start) {
+                            ForEach(items: app.player.chapters, key: id) |chapter| {
+                                if chapter.label_width >= 24.0 {
+                                    Stack(at: chapter.at, width: chapter.label_width, height: 24, align: leading) {
+                                        Button(id: chapter, label: chapter.title, variant: player_picture) {
+                                            Stack(variant: player_text) { Text(content: chapter.title, style: caption, lines: 1) }
+                                        } => app.seek_chapter(chapter.id)
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                Positioned(x: -68, y: 14, width: 54, height: 16) { Row { Spacer Stack(variant: player_text) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2) } } }
+                Positioned(x: end, y: 14, width: 54, height: 16) { Stack(variant: player_secondary) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2) } }
             }
-            Positioned(x: -68, y: 14, width: 54, height: 16) { Row { Spacer Stack(variant: player_text) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2) } } }
-            Positioned(x: end, y: 14, width: 54, height: 16) { Stack(variant: player_secondary) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2) } }
         }
     }
 }
@@ -696,48 +759,54 @@ pub fn player_controls(
 ) -> impl View {
     ui! {
         Row(gap: 18, align: center, height: 64) {
-            Row(gap: 10, align: center, height: 64) {
-                IconButton(id: previous, variant: transport, icon: "backward.end.fill", label: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, height: 44, prominence: plain, enabled: app.player.has_previous) => app.change_episode(-1)
-                IconButton(id: rewind, icon: "gobackward.10", variant: transport, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }, height: 44, prominence: plain, shortcut: app.keys.seek_back) => app.skip(-10.0)
-                if app.paused {
-                    IconButton(id: play, icon: "play.fill", label: tr! { "zh-Hans" => "播放", "en" => "Play" }, variant: player_primary, height: 64, prominence: plain, shortcut: app.keys.play_pause) => app.toggle_pause()
-                } else {
-                    IconButton(id: pause, icon: "pause.fill", label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, variant: player_primary, height: 64, prominence: plain, shortcut: app.keys.play_pause) => app.toggle_pause()
+            Stack(variant: player_ambient) {
+                Row(gap: 10, align: center, height: 64) {
+                    IconButton(id: previous, variant: transport, icon: "backward.end.fill", label: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, height: 44, prominence: plain, enabled: app.player.has_previous) => app.change_episode(-1)
+                    IconButton(id: rewind, icon: "gobackward.10", variant: transport, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }, height: 44, prominence: plain, shortcut: app.keys.seek_back) => app.skip(-10.0)
+                    if app.paused {
+                        IconButton(id: play, icon: "play.fill", label: tr! { "zh-Hans" => "播放", "en" => "Play" }, variant: player_primary, height: 64, prominence: plain, shortcut: app.keys.play_pause) => app.toggle_pause()
+                    } else {
+                        IconButton(id: pause, icon: "pause.fill", label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, variant: player_primary, height: 64, prominence: plain, shortcut: app.keys.play_pause) => app.toggle_pause()
+                    }
+                    IconButton(id: forward, icon: "goforward.10", variant: transport, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }, height: 44, prominence: plain, shortcut: app.keys.seek_forward) => app.skip(10.0)
+                    IconButton(id: next, variant: transport, icon: "forward.end.fill", label: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, height: 44, prominence: plain, enabled: app.player.has_next) => app.change_episode(1)
                 }
-                IconButton(id: forward, icon: "goforward.10", variant: transport, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }, height: 44, prominence: plain, shortcut: app.keys.seek_forward) => app.skip(10.0)
-                IconButton(id: next, variant: transport, icon: "forward.end.fill", label: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, height: 44, prominence: plain, enabled: app.player.has_next) => app.change_episode(1)
             }
             if (build.modules.danmaku && app.features.danmaku) {
-                Stack(variant: player_buttons) {
-                    ControlGroup(height: 40) {
-                        PopoverButton(id: danmaku, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, icon: "text.bubble", presented: draft.danmaku_open) {
-                            Stack(appearance: dark, tint: text.primary) { player_danmaku_quick(app: app) }
-                        }
-                        PopoverButton(id: compose_danmaku, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send danmaku" }, icon: "paperplane", presented: draft.composer_open) {
-                            Stack(appearance: dark, tint: text.primary) { player_danmaku_composer(app: app) }
+                Stack(variant: player_buttons_ambient) {
+                    Stack(variant: player_buttons) {
+                        ControlGroup(height: 40) {
+                            PopoverButton(id: danmaku, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, icon: "text.bubble", presented: draft.danmaku_open) {
+                                Stack(appearance: dark, tint: text.primary) { player_danmaku_quick(app: app) }
+                            }
+                            PopoverButton(id: compose_danmaku, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send danmaku" }, icon: "paperplane", presented: draft.composer_open) {
+                                Stack(appearance: dark, tint: text.primary) { player_danmaku_composer(app: app) }
+                            }
                         }
                     }
                 }
                 Shortcut(key: app.keys.toggle_danmaku) => app.set_preference("show_danmaku", !app.preferences.show_danmaku)
             }
             Spacer
-            Stack(variant: player_buttons) {
-                ControlGroup(height: 40) {
-                    player_subtitle_menu(app: app)
-                    PopoverButton(id: rate, icon: "speedometer", label: tr! { "zh-Hans" => "播放速度", "en" => "Playback speed" }, presented: draft.rate_open) {
-                        Stack(appearance: dark, tint: text.primary) { player_speed_menu(app: app) }
-                    }
-                    if (build.modules.enhance && app.features.enhance) {
-                        PopoverButton(id: enhancement, icon: "sparkles", label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, presented: draft.enhancement_open) {
-                            Stack(appearance: dark, tint: text.primary) { player_enhancement_menu(app: app) }
+            Stack(variant: player_buttons_ambient) {
+                Stack(variant: player_buttons) {
+                    ControlGroup(height: 40) {
+                        player_subtitle_menu(app: app)
+                        PopoverButton(id: rate, icon: "speedometer", label: tr! { "zh-Hans" => "播放速度", "en" => "Playback speed" }, presented: draft.rate_open) {
+                            Stack(appearance: dark, tint: text.primary) { player_speed_menu(app: app) }
                         }
-                    }
-                    if !window.short {
-                    if window.fullscreen {
-                        IconButton(id: exit_fullscreen, icon: "arrow.down.right.and.arrow.up.left", label: tr! { "zh-Hans" => "退出全屏", "en" => "Exit full screen" }, shortcut: app.keys.fullscreen) => windows.main.toggle_fullscreen()
-                    } else {
-                        IconButton(id: fullscreen, icon: "viewfinder", label: tr! { "zh-Hans" => "全屏", "en" => "Full screen" }, shortcut: app.keys.fullscreen) => windows.main.toggle_fullscreen()
-                    }
+                        if (build.modules.enhance && app.features.enhance) {
+                            PopoverButton(id: enhancement, icon: "sparkles", label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, presented: draft.enhancement_open) {
+                                Stack(appearance: dark, tint: text.primary) { player_enhancement_menu(app: app) }
+                            }
+                        }
+                        if !window.short {
+                        if window.fullscreen {
+                            IconButton(id: exit_fullscreen, icon: "arrow.down.right.and.arrow.up.left", label: tr! { "zh-Hans" => "退出全屏", "en" => "Exit full screen" }, shortcut: app.keys.fullscreen) => windows.main.toggle_fullscreen()
+                        } else {
+                            IconButton(id: fullscreen, icon: "viewfinder", label: tr! { "zh-Hans" => "全屏", "en" => "Full screen" }, shortcut: app.keys.fullscreen) => windows.main.toggle_fullscreen()
+                        }
+                        }
                     }
                 }
             }
@@ -1393,6 +1462,134 @@ pub fn player_matching(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Pre-playback loading screen modeled after NipaPlay's LoadingOverlay:
+/// ambient cover backdrop, two-column desktop/TV card (vertical on phone)
+/// with poster/title on one side and live recognition/danmaku steps on the
+/// other, plus a direct "Play now" bypass button.
+#[component]
+pub fn player_loading_overlay(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        Stack(under_bars: true, appearance: dark, variant: player_loading_backdrop, appear: fade, disappear: fade) {
+            if app.player.loading.cover.url != "" {
+                Image(source: app.player.loading.cover, fit: cover, label: app.title)
+                Canvas {
+                    Shape(kind: rect, fill: surface.canvas, opacity: 0.72)
+                }
+                Canvas {
+                    Shape(kind: rect, fill_from: app.player.loading.cover, opacity: 0.22)
+                }
+            }
+            Column(gap: 0) {
+                Column(gap: 0, variant: player_top_wrap) {
+                    Row(gap: 0, variant: player_top_row, align: top) {
+                        player_top_back_shortcut(app: app)
+                        if !window.fullscreen && !(window.short || window.compact || window.medium || window.tv) {
+                            WindowButtons
+                        }
+                        player_top_back_button(app: app, desktop: !(window.short || window.compact || window.medium || window.tv))
+                        Spacer
+                        if !window.fullscreen && !(window.short || window.compact || window.medium || window.tv) {
+                            WindowButtons(edge: trailing)
+                        }
+                    }
+                }
+                Spacer
+                Row(align: center) {
+                    Spacer
+                    if window.short || window.compact || window.medium {
+                        Stack(variant: player_loading_card, width: 340, height: 296) {
+                            Column(gap: 14, padding: 18) {
+                                Row(gap: 12, align: center) {
+                                    player_loading_cover(app: app, compact: true)
+                                    Column(gap: 4, width: 232) {
+                                        Text(content: app.title, style: headline, lines: 2)
+                                        Text(content: app.subtitle, style: caption, emphasis: secondary, lines: 1)
+                                    }
+                                }
+                                Canvas(height: 1) {
+                                    Shape(kind: rect, fill: control.border, opacity: 0.45)
+                                }
+                                player_loading_steps(app: app, compact: true)
+                            }
+                        }
+                    } else {
+                        Stack(variant: player_loading_card, width: 620, height: 308) {
+                            Row(gap: 20, padding: 24) {
+                                Column(gap: 8, width: 176) {
+                                    player_loading_cover(app: app, compact: false)
+                                    Text(content: app.title, style: headline, lines: 2)
+                                    Text(content: app.subtitle, style: caption, emphasis: secondary, lines: 1)
+                                }
+                                Canvas(width: 1) {
+                                    Shape(kind: rect, fill: control.border, opacity: 0.45)
+                                }
+                                player_loading_steps(app: app, compact: false)
+                            }
+                        }
+                    }
+                    Spacer
+                }
+                Spacer
+            }
+        }
+    }
+}
+
+#[component]
+pub fn player_loading_cover(
+    app: erika::Client,
+    compact: bool,
+) -> impl View {
+    ui! {
+        if compact {
+            if app.player.loading.cover.url != "" {
+                Image(source: app.player.loading.cover, width: 60, height: 80, corner: 10, fit: cover, label: app.title)
+            } else {
+                Stack(variant: player_loading_cover, width: 60, height: 80, align: center) {
+                    Label(title: app.title, icon: "film", display: icon, font_size: 22)
+                }
+            }
+        } else {
+            if app.player.loading.cover.url != "" {
+                Image(source: app.player.loading.cover, width: 120, height: 160, corner: 10, fit: cover, label: app.title)
+            } else {
+                Stack(variant: player_loading_cover, width: 120, height: 160, align: center) {
+                    Label(title: app.title, icon: "film", display: icon, font_size: 32)
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn player_loading_steps(app: erika::Client, compact: bool) -> impl View {
+    ui! {
+        Column(gap: 10, width: if compact { 304 } else { 355 }) {
+            ScrollView(axis: vertical, indicators: hidden) {
+                Column(gap: 10) {
+                    ForEach(items: app.player.loading.steps, key: id) |step| {
+                        if step.done {
+                            Row(gap: 8, align: center) {
+                                Stack(variant: player_accent) {
+                                    Label(title: tr! { "zh-Hans" => "已完成", "en" => "Done" }, icon: "checkmark.circle.fill", display: icon, font_size: 14)
+                                }
+                                Text(content: step.message, style: body, emphasis: secondary, lines: 2)
+                            }
+                        } else {
+                            Progress(label: step.message)
+                        }
+                    }
+                }
+            }
+            Spacer
+            Row(align: center) {
+                Spacer
+                Button(id: skip_danmaku_preload, label: tr! { "zh-Hans" => "直接播放", "en" => "Play now" }, prominence: plain) => app.skip_danmaku_preload()
             }
         }
     }

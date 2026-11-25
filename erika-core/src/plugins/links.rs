@@ -463,6 +463,7 @@ impl ErikaEngine {
 
     fn resolution_failed(&mut self, reason: String) {
         self.end_resolution();
+        self.clear_loading();
         let reason = if reason.trim().is_empty() {
             "链接解析失败".to_string()
         } else {

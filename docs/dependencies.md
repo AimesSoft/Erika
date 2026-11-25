@@ -9,7 +9,7 @@ liberika 当前固定到 `v0.3.8` 的提交 `b9881a7`（Windows VS 2026 / MSVC 1
 `bern` 命令与 `Cargo.toml` 里的 Bern 同一版本：命令带着生成各平台工程的模板，与应用依赖的 Bern 一致才能构建。
 
 ```sh
-cargo install --locked --git https://github.com/AimesSoft/Bern --rev 0858b115dd4af31c1bf9b6012eba721dd66f218b bern-cli
+cargo install --locked --git https://github.com/AimesSoft/Bern --rev 1dc460c92e6b936359c36d731d1572a25e684267 bern-cli
 ```
 
 升级 Bern 时，根目录 `Cargo.toml` 的 `bern`、`erika-core/Cargo.toml` 的 `bern-script`、`.github/workflows/release.yml` 的 `BERN_REV` 与这条命令一起换，再装一次。之后在 Erika 根目录运行 `bern run`、`bern build --target <目标>`、`bern package --target <目标>`；`bern doctor` 列出本机构建各目标还缺什么。

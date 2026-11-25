@@ -170,7 +170,7 @@ enum Setting {
     SubtitleScale(f64),
     SubtitleSupersampling(bool),
     Upscaler(LumaUpscalerMode),
-    Capture(PathBuf, Option<u32>),
+    Capture(PathBuf, Option<u32>, Option<Sender<bool>>),
     Danmaku(DanmakuConfig),
     AddDanmaku(String, DanmakuTimeline),
     SendDanmaku(String, u32),
@@ -379,7 +379,21 @@ impl Kernel for Liberika {
     }
 
     fn capture(&self, path: &Path, width: Option<u32>) {
-        self.send(Message::Set(Setting::Capture(path.to_path_buf(), width)));
+        self.send(Message::Set(Setting::Capture(
+            path.to_path_buf(),
+            width,
+            None,
+        )));
+    }
+
+    fn capture_now(&self, path: &Path, width: Option<u32>, timeout: Duration) -> bool {
+        let (done, ready) = channel();
+        self.send(Message::Set(Setting::Capture(
+            path.to_path_buf(),
+            width,
+            Some(done),
+        )));
+        ready.recv_timeout(timeout).unwrap_or(false)
     }
 
     fn close(&self) {
@@ -546,6 +560,17 @@ struct Session {
     /// The swap chain the view's panel was given last.
     #[cfg(target_os = "windows")]
     chain: usize,
+    /// Whether the currently attached view has had a decoded video frame
+    /// rendered into its swap chain since attaching or loading.
+    #[cfg(target_os = "windows")]
+    view_ready: bool,
+    /// Whether the currently attached view requests GPU blended snapshots
+    /// (`CompositionDrawingSurface`) while translucent.
+    #[cfg(target_os = "windows")]
+    blended_mode: bool,
+    /// Generation of the last blended GPU snapshot pushed to the view.
+    #[cfg(target_os = "windows")]
+    blended_gen: u64,
     /// Where the view takes the pictures liberika renders for it.
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     sink: Option<Arc<dyn FrameSink>>,
@@ -597,6 +622,12 @@ impl Session {
             view: None,
             #[cfg(target_os = "windows")]
             chain: 0,
+            #[cfg(target_os = "windows")]
+            view_ready: false,
+            #[cfg(target_os = "windows")]
+            blended_mode: false,
+            #[cfg(target_os = "windows")]
+            blended_gen: 0,
             #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
             sink: None,
             #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
@@ -914,11 +945,13 @@ fn present(session: &mut Session, views: &[View]) {
     }
 }
 
-/// Take the swap chain back from the panel of `session`'s view, which
-/// stays but no longer shows the player.
+/// Take the swap chain and any blended snapshot back from the panel of
+/// `session`'s view, which stays but no longer shows the player.
 #[cfg(target_os = "windows")]
 fn withdraw(session: &mut Session, views: &[View]) {
-    if std::mem::take(&mut session.chain) == 0 {
+    let had_chain = std::mem::take(&mut session.chain) != 0;
+    let had_blended = std::mem::take(&mut session.blended_gen) != 0;
+    if !had_chain && !had_blended {
         return;
     }
     if let Some(view) = session
@@ -927,7 +960,58 @@ fn withdraw(session: &mut Session, views: &[View]) {
         .and_then(|token| views.iter().find(|view| view.token == token))
     {
         // SAFETY: as in `present`.
-        unsafe { set_swap_chain(view.surface.handle, 0) };
+        if had_chain {
+            unsafe { set_swap_chain(view.surface.handle, 0) };
+        }
+        if had_blended {
+            unsafe { present_blended_texture(view.surface.handle, std::ptr::null_mut()) };
+        }
+    }
+}
+
+/// Sync whether `session`'s attached view currently needs alpha-blended GPU
+/// snapshots (for `CompositionDrawingSurface` while `0 < Opacity < 1`).
+#[cfg(target_os = "windows")]
+fn sync_blended_mode(session: &mut Session, views: &[View]) {
+    let want = session
+        .view
+        .as_deref()
+        .and_then(|token| views.iter().find(|view| view.token == token))
+        .is_some_and(|view| unsafe { get_needs_blended_frame(view.surface.handle) });
+    if want != session.blended_mode {
+        session.blended_mode = want;
+        session.presenter.set_composition_blended(want);
+        if !want {
+            session.blended_gen = 0;
+        }
+    }
+}
+
+/// Push the latest GPU blended snapshot to the view's `IBernCompositionVideoTarget`
+/// while translucent composition is active.
+#[cfg(target_os = "windows")]
+fn present_blended(session: &mut Session, views: &[View]) {
+    if !session.blended_mode {
+        return;
+    }
+    let Some((texture, generation)) = session.presenter.composition_blended_texture() else {
+        return;
+    };
+    if generation == session.blended_gen {
+        return;
+    }
+    let Some(view) = session
+        .view
+        .as_deref()
+        .and_then(|token| views.iter().find(|view| view.token == token))
+    else {
+        return;
+    };
+    let result = unsafe { present_blended_texture(view.surface.handle, texture) };
+    if result >= 0 {
+        session.blended_gen = generation;
+    } else {
+        eprintln!("liberika: the panel does not take the blended texture: {result:#x}");
     }
 }
 
@@ -959,6 +1043,93 @@ unsafe fn set_swap_chain(handle: SurfaceHandle, chain: usize) -> i32 {
     unsafe {
         let methods = *(panel as *const *const SetSwapChain);
         (*methods.add(3))(panel, chain as *mut std::ffi::c_void)
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct ComGuid {
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
+
+/// `IBernCompositionVideoTarget` (`B3F4C1E2-8A7D-4C5E-9F1B-2E4D6A8C0F31`).
+#[cfg(target_os = "windows")]
+const IID_BERN_COMPOSITION_VIDEO_TARGET: ComGuid = ComGuid {
+    data1: 0xB3F4_C1E2,
+    data2: 0x8A7D,
+    data3: 0x4C5E,
+    data4: [0x9F, 0x1B, 0x2E, 0x4D, 0x6A, 0x8C, 0x0F, 0x31],
+};
+
+#[cfg(target_os = "windows")]
+struct ComPtr(*mut std::ffi::c_void);
+
+#[cfg(target_os = "windows")]
+impl Drop for ComPtr {
+    fn drop(&mut self) {
+        type ReleaseFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> u32;
+        if !self.0.is_null() {
+            unsafe {
+                let vtbl = *(self.0 as *const *const ReleaseFn);
+                (*vtbl.add(2))(self.0);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn query_composition_video_target(handle: SurfaceHandle) -> Option<ComPtr> {
+    type QueryInterfaceFn = unsafe extern "system" fn(
+        *mut std::ffi::c_void,
+        *const ComGuid,
+        *mut *mut std::ffi::c_void,
+    ) -> i32;
+    let SurfaceHandle::SwapChainPanel(panel) = handle else {
+        return None;
+    };
+    let panel = panel as *mut std::ffi::c_void;
+    if panel.is_null() {
+        return None;
+    }
+    let mut target = std::ptr::null_mut();
+    let hr = unsafe {
+        let vtbl = *(panel as *const *const QueryInterfaceFn);
+        (*vtbl.add(0))(panel, &IID_BERN_COMPOSITION_VIDEO_TARGET, &mut target)
+    };
+    if hr >= 0 && !target.is_null() {
+        Some(ComPtr(target))
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn get_needs_blended_frame(handle: SurfaceHandle) -> bool {
+    type GetNeedsFn = unsafe extern "system" fn(*mut std::ffi::c_void, *mut i32) -> i32;
+    let Some(target) = (unsafe { query_composition_video_target(handle) }) else {
+        return false;
+    };
+    let mut needed: i32 = 0;
+    let hr = unsafe {
+        let vtbl = *(target.0 as *const *const GetNeedsFn);
+        (*vtbl.add(3))(target.0, &mut needed)
+    };
+    hr >= 0 && needed != 0
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn present_blended_texture(handle: SurfaceHandle, texture: *mut std::ffi::c_void) -> i32 {
+    type PresentBlendedFn =
+        unsafe extern "system" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i32;
+    let Some(target) = (unsafe { query_composition_video_target(handle) }) else {
+        return 0;
+    };
+    unsafe {
+        let vtbl = *(target.0 as *const *const PresentBlendedFn);
+        (*vtbl.add(4))(target.0, texture)
     }
 }
 
@@ -1070,6 +1241,12 @@ impl Worker {
                     #[cfg(target_os = "windows")]
                     {
                         session.chain = 0;
+                        session.view_ready = false;
+                        session.blended_gen = 0;
+                        if session.blended_mode {
+                            session.blended_mode = false;
+                            session.presenter.set_composition_blended(false);
+                        }
                     }
                     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
                     {
@@ -1127,6 +1304,11 @@ impl Worker {
             let _ = session.presenter.detach_surface();
         }
         session.view = None;
+        #[cfg(target_os = "windows")]
+        {
+            session.view_ready = false;
+            session.blended_gen = 0;
+        }
         #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         {
             session.sink = None;
@@ -1136,12 +1318,12 @@ impl Worker {
             .attach_surface(platform_surface(&view.surface)?)
             .map_err(failed)?;
         session.view = Some(view.token.clone());
+        #[cfg(target_os = "windows")]
+        sync_blended_mode(session, &self.views);
         #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         {
             session.sink = bern_kernel::frame_sink(view.surface.handle);
         }
-        #[cfg(target_os = "windows")]
-        present(session, &self.views);
         Ok(())
     }
 
@@ -1166,7 +1348,16 @@ impl Worker {
                     self.players.insert(request.player.clone(), replacement);
                     self.show(&request.player)?;
                 }
-                let session = self.session(&request.player)?;
+                let _ = self.session(&request.player)?;
+                let session = self
+                    .players
+                    .get_mut(&request.player)
+                    .expect("session exists");
+                #[cfg(target_os = "windows")]
+                {
+                    withdraw(session, &self.views);
+                    session.view_ready = false;
+                }
                 session.version = request.source_version;
                 session.loaded = false;
                 session.source = Some(url.clone());
@@ -1216,6 +1407,11 @@ impl Worker {
             }
             ExecOp::Unload => {
                 if let Some(session) = self.players.get_mut(&request.player) {
+                    #[cfg(target_os = "windows")]
+                    {
+                        withdraw(session, &self.views);
+                        session.view_ready = false;
+                    }
                     session.version = request.source_version;
                     session.loaded = false;
                     session.presenter.stop().map_err(failed)?;
@@ -1321,7 +1517,7 @@ impl Worker {
             .filter(|session| session.loaded)
         else {
             let operation = match setting {
-                Setting::Capture(path, None) => Some(Operation::Screenshot(path)),
+                Setting::Capture(path, None, _) => Some(Operation::Screenshot(path)),
                 Setting::AddSubtitle(url) => Some(Operation::Subtitle(url)),
                 _ => None,
             };
@@ -1364,14 +1560,18 @@ impl Worker {
                 });
                 Ok(())
             }
-            Setting::Capture(path, width) => {
+            Setting::Capture(path, width, done) => {
                 let result = session.capture(&path, width);
+                let ok = result.is_ok();
                 if width.is_none() {
                     self.results.lock().unwrap().push(OperationResult {
                         source: session.source.clone(),
                         operation: Operation::Screenshot(path),
                         result,
                     });
+                }
+                if let Some(done) = done {
+                    let _ = done.send(ok);
                 }
                 Ok(())
             }
@@ -1449,6 +1649,10 @@ impl Worker {
             if !session.presenter.is_playing() && session.unchanged >= SETTLED_AFTER {
                 continue;
             }
+            #[cfg(target_os = "windows")]
+            sync_blended_mode(session, &self.views);
+            #[cfg(target_os = "windows")]
+            let before_frames = session.presenter.stats().rendered_video_frames;
             match session.presenter.render_tick_at(timing.target, at) {
                 #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
                 Ok(stats) => {
@@ -1459,12 +1663,24 @@ impl Worker {
                         session.unchanged = 0;
                     }
                 }
-                #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
+                #[cfg(target_os = "windows")]
+                Ok(stats) => {
+                    if stats.rendered_video_frames > before_frames {
+                        session.view_ready = true;
+                    }
+                }
+                #[cfg(not(any(
+                    target_os = "windows",
+                    all(target_os = "linux", not(target_env = "ohos"))
+                )))]
                 Ok(_) => {}
                 Err(error) => eprintln!("liberika: frame failed: {}", error_message(&error)),
             }
             #[cfg(target_os = "windows")]
-            present(session, &self.views);
+            if session.view_ready {
+                present(session, &self.views);
+                present_blended(session, &self.views);
+            }
             #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
             deliver(session);
         }

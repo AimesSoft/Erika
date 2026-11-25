@@ -394,8 +394,8 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bern"
-version = "0.2.1"
-source = "git+https://github.com/AimesSoft/Bern?rev=0858b115dd4af31c1bf9b6012eba721dd66f218b#0858b115dd4af31c1bf9b6012eba721dd66f218b"
+version = "0.3.2"
+source = "git+https://github.com/AimesSoft/Bern?rev=1dc460c92e6b936359c36d731d1572a25e684267#1dc460c92e6b936359c36d731d1572a25e684267"
 dependencies = [
  "bern-command",
  "bern-macros",
@@ -408,8 +408,8 @@ dependencies = [
 
 [[package]]
 name = "bern-command"
-version = "0.2.1"
-source = "git+https://github.com/AimesSoft/Bern?rev=0858b115dd4af31c1bf9b6012eba721dd66f218b#0858b115dd4af31c1bf9b6012eba721dd66f218b"
+version = "0.3.2"
+source = "git+https://github.com/AimesSoft/Bern?rev=1dc460c92e6b936359c36d731d1572a25e684267#1dc460c92e6b936359c36d731d1572a25e684267"
 dependencies = [
  "bern-protocol",
  "block2",
@@ -430,8 +430,8 @@ dependencies = [
 
 [[package]]
 name = "bern-ir"
-version = "0.2.1"
-source = "git+https://github.com/AimesSoft/Bern?rev=0858b115dd4af31c1bf9b6012eba721dd66f218b#0858b115dd4af31c1bf9b6012eba721dd66f218b"
+version = "0.3.2"
+source = "git+https://github.com/AimesSoft/Bern?rev=1dc460c92e6b936359c36d731d1572a25e684267#1dc460c92e6b936359c36d731d1572a25e684267"
 dependencies = [
  "bern-protocol",
  "serde",
@@ -440,8 +440,8 @@ dependencies = [
 
 [[package]]
 name = "bern-macros"
-version = "0.2.1"
-source = "git+https://github.com/AimesSoft/Bern?rev=0858b115dd4af31c1bf9b6012eba721dd66f218b#0858b115dd4af31c1bf9b6012eba721dd66f218b"
+version = "0.3.2"
+source = "git+https://github.com/AimesSoft/Bern?rev=1dc460c92e6b936359c36d731d1572a25e684267#1dc460c92e6b936359c36d731d1572a25e684267"
 dependencies = [
  "bern-ir",
  "bern-protocol",
@@ -454,16 +454,16 @@ dependencies = [
 
 [[package]]
 name = "bern-media"
-version = "0.2.1"
-source = "git+https://github.com/AimesSoft/Bern?rev=0858b115dd4af31c1bf9b6012eba721dd66f218b#0858b115dd4af31c1bf9b6012eba721dd66f218b"
+version = "0.3.2"
+source = "git+https://github.com/AimesSoft/Bern?rev=1dc460c92e6b936359c36d731d1572a25e684267#1dc460c92e6b936359c36d731d1572a25e684267"
 dependencies = [
  "bern-protocol",
 ]
 
 [[package]]
 name = "bern-protocol"
-version = "0.2.1"
-source = "git+https://github.com/AimesSoft/Bern?rev=0858b115dd4af31c1bf9b6012eba721dd66f218b#0858b115dd4af31c1bf9b6012eba721dd66f218b"
+version = "0.3.2"
+source = "git+https://github.com/AimesSoft/Bern?rev=1dc460c92e6b936359c36d731d1572a25e684267#1dc460c92e6b936359c36d731d1572a25e684267"
 dependencies = [
  "serde",
  "serde_json",
@@ -471,16 +471,16 @@ dependencies = [
 
 [[package]]
 name = "bern-runtime"
-version = "0.2.1"
-source = "git+https://github.com/AimesSoft/Bern?rev=0858b115dd4af31c1bf9b6012eba721dd66f218b#0858b115dd4af31c1bf9b6012eba721dd66f218b"
+version = "0.3.2"
+source = "git+https://github.com/AimesSoft/Bern?rev=1dc460c92e6b936359c36d731d1572a25e684267#1dc460c92e6b936359c36d731d1572a25e684267"
 dependencies = [
  "bern-protocol",
 ]
 
 [[package]]
 name = "bern-script"
-version = "0.2.1"
-source = "git+https://github.com/AimesSoft/Bern?rev=0858b115dd4af31c1bf9b6012eba721dd66f218b#0858b115dd4af31c1bf9b6012eba721dd66f218b"
+version = "0.3.2"
+source = "git+https://github.com/AimesSoft/Bern?rev=1dc460c92e6b936359c36d731d1572a25e684267#1dc460c92e6b936359c36d731d1572a25e684267"
 dependencies = [
  "boa_engine",
  "boa_gc",
@@ -490,8 +490,8 @@ dependencies = [
 
 [[package]]
 name = "bern-syntax"
-version = "0.2.1"
-source = "git+https://github.com/AimesSoft/Bern?rev=0858b115dd4af31c1bf9b6012eba721dd66f218b#0858b115dd4af31c1bf9b6012eba721dd66f218b"
+version = "0.3.2"
+source = "git+https://github.com/AimesSoft/Bern?rev=1dc460c92e6b936359c36d731d1572a25e684267#1dc460c92e6b936359c36d731d1572a25e684267"
 dependencies = [
  "bern-media",
  "bern-protocol",
@@ -1502,7 +1502,7 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 [[package]]
 name = "erika"
 version = "0.3.8"
-source = "git+https://github.com/AimesSoft/liberika?rev=b9881a72dc6cb822865c74858c45ce2d4c8d4960#b9881a72dc6cb822865c74858c45ce2d4c8d4960"
+source = "git+https://github.com/AimesSoft/liberika?rev=3b6edd030e6243c8ea33b409ed7bd7edcf4f06db#3b6edd030e6243c8ea33b409ed7bd7edcf4f06db"
 dependencies = [
  "ab_glyph",
  "ab_glyph_rasterizer",
@@ -1926,7 +1926,7 @@ dependencies = [
 [[package]]
 name = "erika_ffmpeg_sys"
 version = "0.3.8"
-source = "git+https://github.com/AimesSoft/liberika?rev=b9881a72dc6cb822865c74858c45ce2d4c8d4960#b9881a72dc6cb822865c74858c45ce2d4c8d4960"
+source = "git+https://github.com/AimesSoft/liberika?rev=3b6edd030e6243c8ea33b409ed7bd7edcf4f06db#3b6edd030e6243c8ea33b409ed7bd7edcf4f06db"
 dependencies = [
  "bindgen 0.72.1",
  "libc",
@@ -1936,7 +1936,7 @@ dependencies = [
 [[package]]
 name = "erika_plugin"
 version = "0.3.8"
-source = "git+https://github.com/AimesSoft/liberika?rev=b9881a72dc6cb822865c74858c45ce2d4c8d4960#b9881a72dc6cb822865c74858c45ce2d4c8d4960"
+source = "git+https://github.com/AimesSoft/liberika?rev=3b6edd030e6243c8ea33b409ed7bd7edcf4f06db#3b6edd030e6243c8ea33b409ed7bd7edcf4f06db"
 dependencies = [
  "regex",
  "serde",

@@ -137,6 +137,13 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
             features.danmaku,
         ),
         (
+            I::LoadDanmakuBeforePlay,
+            P::Danmaku,
+            "播放前加载弹幕 load danmaku before playback",
+            "播放后 加载界面 预加载 弹弹play preload before play",
+            features.danmaku,
+        ),
+        (
             I::MountDanmaku,
             P::Danmaku,
             "挂载本地弹幕 mount local danmaku",
@@ -340,7 +347,7 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
     results.into_iter().map(|(_, entry)| entry).collect()
 }
 
-pub(crate) fn actions(text: &str, anime_enabled: bool, danmaku_enabled: bool) -> SearchActions {
+pub(crate) fn actions(text: &str, features: &FeatureSelection) -> SearchActions {
     let q = text.trim().to_lowercase();
     let matches = |name: &str| q.is_empty() || name.to_lowercase().contains(&q);
     let mut slots = if q.is_empty() { 3 } else { 4 };
@@ -352,15 +359,17 @@ pub(crate) fn actions(text: &str, anime_enabled: bool, danmaku_enabled: bool) ->
         found
     };
     let theme = setting("主题色 设置 › 外观 theme color appearance settings");
-    let danmaku = danmaku_enabled && setting("弹幕不透明度 设置 › 弹幕 danmaku opacity settings");
+    let danmaku = features.danmaku && setting("弹幕不透明度 设置 › 弹幕 danmaku opacity settings");
     let skip_intro = setting("片头／片尾跳过提示 设置 › 播放 skip intro playback settings");
     let optional = setting("可选功能 设置 optional features settings");
     let plugins = setting("插件市场 设置 › 插件 plugin marketplace settings");
     let keys = setting("快捷键 设置 keyboard shortcuts settings");
     let open_file = matches("打开文件… open file");
-    let schedule = anime_enabled && matches("新番表 airing schedule");
+    let schedule = features.anime && matches("新番表 airing schedule");
     let dark = matches("切换深色模式 toggle dark mode");
-    let has_settings = theme || danmaku || skip_intro || optional || plugins || keys;
+    let has_indexed_settings = !q.is_empty() && !settings(text, features).is_empty();
+    let has_settings =
+        theme || danmaku || skip_intro || optional || plugins || keys || has_indexed_settings;
     let has_operations = open_file || schedule || dark;
     SearchActions {
         theme,
@@ -416,6 +425,11 @@ mod tests {
             settings("弹幕 透明度", &features)[0].item,
             SettingItem::DanmakuOpacity
         );
+        assert!(
+            settings("播放前加载弹幕", &features)
+                .iter()
+                .any(|x| x.item == SettingItem::LoadDanmakuBeforePlay)
+        );
         features.library = true;
         features.anime = true;
         let results = settings("设置", &features);
@@ -445,15 +459,23 @@ mod tests {
     }
     #[test]
     fn empty_query_uses_three_settings_and_all_operations() {
-        let a = actions("", true, true);
+        let mut all = crate::settings::feature_selection(&[]);
+        all.anime = true;
+        all.danmaku = true;
+        let a = actions("", &all);
         assert!(a.theme && a.danmaku && a.skip_intro && a.open_file && a.schedule && a.dark);
         assert!(!a.optional && !a.plugins && !a.keys);
-        assert!(actions("不存在", true, true).empty);
-        assert!(actions("  深色  ", true, true).dark);
-        let a = actions("设置", true, true);
+        assert!(actions("不存在", &all).empty);
+        assert!(actions("  深色  ", &all).dark);
+        let a = actions("设置", &all);
         assert!(a.theme && a.danmaku && a.skip_intro && a.optional);
         assert!(!a.plugins && !a.keys);
-        let disabled = actions("", false, false);
+        // Any indexed setting (e.g. hardware decoding) also keeps settings visible.
+        assert!(actions("硬解", &all).has_settings);
+        let mut off = crate::settings::feature_selection(&[]);
+        off.anime = false;
+        off.danmaku = false;
+        let disabled = actions("", &off);
         assert!(!disabled.schedule && !disabled.danmaku && disabled.optional);
     }
 }
