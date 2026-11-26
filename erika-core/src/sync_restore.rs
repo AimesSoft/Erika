@@ -32,7 +32,9 @@ impl ErikaEngine {
                 self.db.setting("skip_segments").as_deref() != Some("false");
             self.state.danmaku_settings.supersampling =
                 self.db.setting("danmaku_supersampling").as_deref() != Some("false");
+            self.refresh_enhancements();
             self.apply_enhancement();
+            self.apply_filter();
             self.apply_danmaku();
             self.plugins_restored();
         }

@@ -1,8 +1,7 @@
 //! Browser adapter: no frame buffers cross the WASM or WebUI boundary.
 //! Commands are copied by the JS extension before being deferred; snapshots
 //! contain only playback metadata. liberika's worker owns all decoding/rendering.
-use super::{Chapter, DanmakuConfig, Kernel, Playback, Track};
-use erika_protocol::erika::Enhancement;
+use super::{Chapter, DanmakuConfig, FilterTarget, Kernel, Playback, Track, UpscalerTarget};
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc};
 
@@ -184,7 +183,8 @@ impl Kernel for Web {
     fn set_subtitle_supersampling(&self, value: bool) {
         self.send(json!({"op":"subtitleOptions", "config":{"supersampling":value}}));
     }
-    fn set_enhancement(&self, _: Enhancement) {} // Not exposed by the browser UI.
+    fn set_enhancement(&self, _: UpscalerTarget) {} // Not exposed by the browser UI.
+    fn set_filter(&self, _: FilterTarget) {} // Not exposed by the browser UI.
     fn set_danmaku(&self, c: &DanmakuConfig) {
         self.send(json!({"op":"danmakuOptions", "config":{
             "enabled":c.enabled, "supersampling":c.supersampling, "opacity":c.opacity,

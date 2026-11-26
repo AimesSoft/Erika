@@ -1502,7 +1502,7 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 [[package]]
 name = "erika"
 version = "0.3.8"
-source = "git+https://github.com/AimesSoft/liberika?rev=3b6edd030e6243c8ea33b409ed7bd7edcf4f06db#3b6edd030e6243c8ea33b409ed7bd7edcf4f06db"
+source = "git+https://github.com/AimesSoft/liberika?rev=35bf0017d00383a7daacb9980605a2e8e1dbf33f#35bf0017d00383a7daacb9980605a2e8e1dbf33f"
 dependencies = [
  "ab_glyph",
  "ab_glyph_rasterizer",
@@ -1522,6 +1522,7 @@ dependencies = [
  "js-sys",
  "libc",
  "memmap2",
+ "naga",
  "objc2",
  "objc2-core-foundation",
  "objc2-core-graphics",
@@ -1926,7 +1927,7 @@ dependencies = [
 [[package]]
 name = "erika_ffmpeg_sys"
 version = "0.3.8"
-source = "git+https://github.com/AimesSoft/liberika?rev=3b6edd030e6243c8ea33b409ed7bd7edcf4f06db#3b6edd030e6243c8ea33b409ed7bd7edcf4f06db"
+source = "git+https://github.com/AimesSoft/liberika?rev=35bf0017d00383a7daacb9980605a2e8e1dbf33f#35bf0017d00383a7daacb9980605a2e8e1dbf33f"
 dependencies = [
  "bindgen 0.72.1",
  "libc",
@@ -1936,7 +1937,7 @@ dependencies = [
 [[package]]
 name = "erika_plugin"
 version = "0.3.8"
-source = "git+https://github.com/AimesSoft/liberika?rev=3b6edd030e6243c8ea33b409ed7bd7edcf4f06db#3b6edd030e6243c8ea33b409ed7bd7edcf4f06db"
+source = "git+https://github.com/AimesSoft/liberika?rev=35bf0017d00383a7daacb9980605a2e8e1dbf33f#35bf0017d00383a7daacb9980605a2e8e1dbf33f"
 dependencies = [
  "regex",
  "serde",
@@ -3545,6 +3546,7 @@ dependencies = [
  "log",
  "num-traits",
  "once_cell",
+ "pp-rs",
  "rustc-hash 1.1.0",
  "spirv",
  "thiserror 2.0.21",
@@ -4261,6 +4263,15 @@ name = "powerfmt"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a6394b9e965e73d0a289ee54f589087e2c676aedf60885baf52c76b771e4958"
+
+[[package]]
+name = "pp-rs"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb458bb7f6e250e6eb79d5026badc10a3ebb8f9a15d1fff0f13d17c71f4d6dee"
+dependencies = [
+ "unicode-xid",
+]
 
 [[package]]
 name = "ppv-lite86"
@@ -5789,6 +5800,12 @@ name = "unicode-width"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
+
+[[package]]
+name = "unicode-xid"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
 name = "untrusted"

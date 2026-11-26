@@ -64,7 +64,7 @@ pub fn help_dialog(app: erika::Client) -> impl View {
                                 Row(gap: 0) {
                                     Column(gap: 3) {
                                         Text(content: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, style: headline)
-                                        Text(content: tr! { "zh-Hans" => "用 ArtCNN 超分辨率让低分辨率的动画更清晰，在播放设置的「画面」里选择。", "en" => "ArtCNN upscaling sharpens low-resolution animation; choose it under Picture in the playback settings." }, emphasis: secondary, lines: 4)
+                                        Text(content: tr! { "zh-Hans" => "自动检测当前设备支持的超分辨率算法，并支持通过插件扩展自定义模型与画面滤镜。", "en" => "Automatically detects supported upscalers for your device, and supports custom models and picture filters through plugins." }, emphasis: secondary, lines: 4)
                                     }
                                     Spacer
                                 }

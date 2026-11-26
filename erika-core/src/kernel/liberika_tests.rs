@@ -86,6 +86,7 @@ fn adapter(
         results: Arc::default(),
         frames: Arc::default(),
         opens: Mutex::default(),
+        capabilities: Arc::default(),
     });
     let hub = Arc::new(Probe {
         kernel: Arc::downgrade(&kernel),

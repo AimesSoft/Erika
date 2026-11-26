@@ -64,12 +64,10 @@ impl ErikaEngine {
             Some("Full") => DanmakuArea::Full,
             _ => DanmakuArea::Half,
         };
-        self.state.player.enhancement = match self.db.setting("player.enhancement").as_deref() {
-            Some("ArtCnn") => Enhancement::ArtCnn,
-            Some("ArtCnnQuality") => Enhancement::ArtCnnQuality,
-            Some("ArtCnnDenoise") => Enhancement::ArtCnnDenoise,
-            _ => Enhancement::Off,
-        };
+        self.state.player.enhancement =
+            crate::enhance::migrate_saved_enhancement(self.db.setting("player.enhancement").as_deref());
+        self.state.player.filter =
+            crate::enhance::normalize_id(self.db.setting("player.filter").as_deref().unwrap_or("off"));
         self.state.preferences.playback_end = match self.db.setting("playback.end").as_deref() {
             Some("Stop") => PlaybackEnd::Stop,
             _ => PlaybackEnd::Next,

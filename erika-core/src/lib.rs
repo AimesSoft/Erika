@@ -14,6 +14,7 @@ mod catalog_matching;
 mod catalog_playback;
 mod chapters;
 mod danmaku;
+mod enhance;
 mod history;
 mod kernel;
 mod keys;
@@ -56,6 +57,7 @@ pub struct ErikaEngine {
     pub(crate) onboarding_completed: bool,
     /// liberika, where it runs, and the media it plays.
     kernel: Option<Arc<dyn Kernel>>,
+    pub(crate) kernel_capabilities: kernel::KernelUpscalerCapabilities,
     source: Option<MediaSource>,
     /// The current transport has reported a loaded playback, not just accepted an open request.
     playback_observed: bool,
@@ -214,6 +216,7 @@ impl Default for ErikaEngine {
             pending_modules: None,
             onboarding_completed: false,
             kernel: if cfg!(test) { None } else { kernel::start() },
+            kernel_capabilities: kernel::KernelUpscalerCapabilities::default(),
             source: None,
             playback_observed: false,
             logical_source: None,
@@ -322,6 +325,7 @@ impl Default for ErikaEngine {
             engine.state.preset = settings::preset_of(enabled);
         }
         engine.show_speeds();
+        engine.init_enhancements();
         #[cfg(feature = "bern-module-account")]
         if engine.state.features.account {
             engine.restore_account();
@@ -1145,12 +1149,27 @@ impl erika::Commands for ErikaEngine {
     fn select_audio_track(&mut self, id: i64) -> Result<(), CommandError> {
         self.select_audio(id)
     }
-    fn set_enhancement(&mut self, value: Enhancement) -> Result<(), CommandError> {
-        self.db
-            .set_setting("player.enhancement", Some(&format!("{value:?}")));
-        self.state.player.enhancement = value;
+    fn set_enhancement(&mut self, value: String) -> Result<(), CommandError> {
+        let id = enhance::normalize_id(&value);
+        self.db.set_setting("player.enhancement", Some(&id));
+        self.state.player.enhancement = id;
+        self.refresh_enhancements();
         self.apply_enhancement();
         Ok(())
+    }
+    fn set_filter(&mut self, value: String) -> Result<(), CommandError> {
+        let id = enhance::normalize_id(&value);
+        self.db.set_setting("player.filter", Some(&id));
+        self.state.player.filter = id;
+        self.refresh_enhancements();
+        self.apply_filter();
+        Ok(())
+    }
+    fn open_picture_plugins(&mut self) -> Result<(), CommandError> {
+        self.state.plugin_category = PluginCategory::Picture;
+        self.state.plugin_tab = PluginTab::Market;
+        self.show_plugins();
+        self.open_settings_page(SettingsPage::Plugins)
     }
     fn set_subtitle_supersampling(&mut self, enabled: bool) -> Result<(), CommandError> {
         self.state.player.subtitle_supersampling = enabled;

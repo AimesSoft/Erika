@@ -10,10 +10,64 @@ mod router;
 
 mod web;
 
-use erika_protocol::erika::Enhancement;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// One built-in upscaler mode discovered from the active playback kernel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KernelUpscalerDescriptor {
+    pub id: String,
+    pub group_id: String,
+    pub group_name: String,
+    pub name: String,
+}
+
+/// Upscaling and post-processing capabilities detected for this device.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KernelUpscalerCapabilities {
+    pub modes: Vec<KernelUpscalerDescriptor>,
+    pub supports_custom_network: bool,
+    pub supports_post_process: bool,
+}
+
+/// Runtime execution state of an active upscaler or post-processing filter.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KernelShaderStatus {
+    pub active: bool,
+    pub building: bool,
+    pub inactive: bool,
+    pub engine: String,
+    pub reason: String,
+    pub gpu_ms: Option<f64>,
+}
+
+/// Concrete upscaler selection sent to the kernel.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum UpscalerTarget {
+    #[default]
+    Off,
+    /// Built-in liberika mode identified by its stable label.
+    Builtin(String),
+    /// Runtime-loaded plugin network (`.esr` or supported mpv CNN shader).
+    Custom {
+        id: String,
+        name: String,
+        bytes: Vec<u8>,
+    },
+}
+
+/// Concrete RGB post-processing filter sent to the kernel.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FilterTarget {
+    #[default]
+    Off,
+    Shader {
+        id: String,
+        name: String,
+        bytes: Vec<u8>,
+    },
+}
 
 /// The application player Erika plays in: `Players::video` of the
 /// interface, the name every entry addresses it by.
@@ -76,7 +130,11 @@ pub trait Kernel: Send + Sync {
     /// 1 is the subtitles' own size.
     fn set_subtitle_scale(&self, scale: f64);
     fn set_subtitle_supersampling(&self, enabled: bool);
-    fn set_enhancement(&self, enhancement: Enhancement);
+    fn upscaler_capabilities(&self) -> KernelUpscalerCapabilities {
+        KernelUpscalerCapabilities::default()
+    }
+    fn set_enhancement(&self, target: UpscalerTarget);
+    fn set_filter(&self, _target: FilterTarget) {}
     /// How the comments over the video look and which show.
     fn set_danmaku(&self, config: &DanmakuConfig);
     /// Show the comments of a Bilibili xml or Dandanplay json file over
@@ -138,6 +196,10 @@ pub struct Playback {
     pub subtitle_track: Option<i64>,
     /// Codec and height of the video, such as `HEVC · 1080p`.
     pub video: String,
+    /// Latest upscaler and shader capabilities reported by the active renderer.
+    pub capabilities: Option<KernelUpscalerCapabilities>,
+    pub upscaler_status: KernelShaderStatus,
+    pub filter_status: KernelShaderStatus,
     /// The picture captured last.
     pub still: Option<PathBuf>,
     pub error: Option<String>,

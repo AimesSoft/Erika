@@ -5,6 +5,18 @@
 use erika_protocol::erika::{PluginCategory, PluginIcon, PluginPermission};
 use serde_json::{Value, json};
 
+/// One super-resolution network or post-processing filter bundled inside a
+/// picture plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackShader {
+    pub id: String,
+    pub name: String,
+    /// Optional sub-group label; defaults to the plugin's own name.
+    pub group: String,
+    /// Relative path inside the plugin directory (e.g. `"shaders/crt_lite.glsl"`).
+    pub file: String,
+}
+
 /// A plugin's declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pack {
@@ -23,12 +35,17 @@ pub struct Pack {
     pub icon: PluginIcon,
     /// The icon's file in the plugin's folder.
     pub image: Option<String>,
-    /// The script's file in the plugin's folder.
+    /// The script's file in the plugin's folder, or empty for pure asset
+    /// plugins (such as shader-only picture packs).
     pub main: String,
     /// Smaller goes first where plugins take turns.
     pub priority: i64,
     /// HTTPS scripts to run before the plugin's own.
     pub requires: Vec<External>,
+    /// Bundled super-resolution networks (`.esr` / supported mpv CNN shaders).
+    pub upscalers: Vec<PackShader>,
+    /// Bundled RGB post-processing shaders (mpv `//!HOOK MAIN` GLSL / WGSL).
+    pub filters: Vec<PackShader>,
     pub nipaplay: bool,
 }
 
@@ -61,6 +78,58 @@ fn texts(value: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn is_safe_relative_path(path: &str) -> bool {
+    if path.is_empty() || path.starts_with('/') || path.starts_with('\\') || path.contains(':') {
+        return false;
+    }
+    path.split(['/', '\\'])
+        .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+}
+
+fn parse_shaders(value: &Value, key: &str, default_group: &str) -> Result<Vec<PackShader>, String> {
+    let Some(list) = value.get(key).and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut shaders = Vec::with_capacity(list.len());
+    for item in list {
+        let id = text(item, "id");
+        let name = text(item, "name");
+        let file = text(item, "file");
+        let group = {
+            let g = text(item, "group");
+            if g.is_empty() {
+                default_group.to_string()
+            } else {
+                g
+            }
+        };
+        if id.is_empty() || name.is_empty() || file.is_empty() {
+            return Err(format!("pack.json 的 {key} 条目缺少 id、name 或 file"));
+        }
+        if !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
+            return Err(format!(
+                "着色器 id「{id}」只能有字母、数字、点、下划线和连字符"
+            ));
+        }
+        if !is_safe_relative_path(&file) {
+            return Err(format!("着色器文件路径「{file}」必须在插件目录内"));
+        }
+        if shaders.iter().any(|existing: &PackShader| existing.id == id) {
+            return Err(format!("pack.json 的 {key} 中存在重复的 id「{id}」"));
+        }
+        shaders.push(PackShader {
+            id,
+            name,
+            group,
+            file,
+        });
+    }
+    Ok(shaders)
+}
+
 impl Pack {
     /// An Erika plugin's `pack.json`.
     pub fn from_pack(value: &Value) -> Result<Pack, String> {
@@ -72,12 +141,35 @@ impl Pack {
         })?;
         let image = text(value, "icon");
         pack.image = (!image.is_empty()).then_some(image);
+        pack.upscalers = parse_shaders(value, "upscalers", &pack.name)?;
+        pack.filters = parse_shaders(value, "filters", &pack.name)?;
         pack.icon = icon_named(&text(value, "iconId")).unwrap_or_else(|| guess_icon(&pack));
-        let main = text(value, "main");
-        if !main.is_empty() {
-            pack.main = main;
+        match value.get("main") {
+            Some(Value::String(main)) => pack.main = main.trim().to_string(),
+            Some(Value::Null) => pack.main.clear(),
+            None if !pack.upscalers.is_empty() || !pack.filters.is_empty() => pack.main.clear(),
+            _ => {}
+        }
+        if !pack.main.is_empty() && !is_safe_relative_path(&pack.main) {
+            return Err(format!("脚本路径「{}」必须在插件目录内", pack.main));
         }
         Ok(pack)
+    }
+
+    /// Whether this plugin provides any bundled picture shaders.
+    pub fn has_picture_shaders(&self) -> bool {
+        !self.upscalers.is_empty() || !self.filters.is_empty()
+    }
+
+    /// Unique relative file paths declared by `upscalers` and `filters`.
+    pub fn shader_files(&self) -> Vec<String> {
+        let mut files = Vec::new();
+        for entry in self.upscalers.iter().chain(&self.filters) {
+            if !files.contains(&entry.file) {
+                files.push(entry.file.clone());
+            }
+        }
+        files
     }
 
     /// A NipaPlay script's `pluginManifest`, its version requirement dropped.
@@ -134,6 +226,8 @@ impl Pack {
             main: "main.js".into(),
             priority: value.get("priority").and_then(Value::as_i64).unwrap_or(50),
             requires,
+            upscalers: Vec::new(),
+            filters: Vec::new(),
             nipaplay: false,
         })
     }
@@ -141,22 +235,41 @@ impl Pack {
     /// The declaration as `pack.json` holds it; NipaPlay's plugins keep
     /// theirs this way once installed.
     pub fn to_value(&self) -> Value {
-        json!({
-            "id": self.id,
-            "name": self.name,
-            "version": self.version,
-            "description": self.description,
-            "author": self.author,
-            "github": self.github,
-            "minHostVersion": self.min_host,
-            "permissions": self.permissions,
-            "category": category_name(&self.category),
-            "icon": self.image,
-            "iconId": icon_name(&self.icon),
-            "main": self.main,
-            "priority": self.priority,
-            "nipaplay": self.nipaplay,
-        })
+        let shader_json = |items: &[PackShader]| -> Vec<Value> {
+            items
+                .iter()
+                .map(|item| {
+                    json!({
+                        "id": item.id,
+                        "name": item.name,
+                        "group": item.group,
+                        "file": item.file,
+                    })
+                })
+                .collect()
+        };
+        let mut object = serde_json::Map::new();
+        object.insert("id".into(), json!(self.id));
+        object.insert("name".into(), json!(self.name));
+        object.insert("version".into(), json!(self.version));
+        object.insert("description".into(), json!(self.description));
+        object.insert("author".into(), json!(self.author));
+        object.insert("github".into(), json!(self.github));
+        object.insert("minHostVersion".into(), json!(self.min_host));
+        object.insert("permissions".into(), json!(self.permissions));
+        object.insert("category".into(), json!(category_name(&self.category)));
+        object.insert("icon".into(), json!(self.image));
+        object.insert("iconId".into(), json!(icon_name(&self.icon)));
+        object.insert("main".into(), json!(self.main));
+        object.insert("priority".into(), json!(self.priority));
+        object.insert("nipaplay".into(), json!(self.nipaplay));
+        if !self.upscalers.is_empty() {
+            object.insert("upscalers".into(), Value::Array(shader_json(&self.upscalers)));
+        }
+        if !self.filters.is_empty() {
+            object.insert("filters".into(), Value::Array(shader_json(&self.filters)));
+        }
+        Value::Object(object)
     }
 
     /// The plugin as `pack.json` keeps it once installed.
@@ -184,6 +297,12 @@ impl Pack {
             {
                 tags.push(tag);
             }
+        }
+        if !self.upscalers.is_empty() && !tags.contains(&PluginPermission::PictureUpscaler) {
+            tags.push(PluginPermission::PictureUpscaler);
+        }
+        if !self.filters.is_empty() && !tags.contains(&PluginPermission::PictureFilter) {
+            tags.push(PluginPermission::PictureFilter);
         }
         tags
     }
@@ -244,6 +363,7 @@ impl Pack {
                         "erika.set_speed",
                         "erika.set_rate",
                         "erika.set_enhancement",
+                        "erika.set_filter",
                         "erika.set_subtitle_supersampling",
                         "erika.set_player_number",
                         "erika.preview_player_volume",
@@ -384,6 +504,8 @@ pub fn permission(id: &str) -> Option<PluginPermission> {
         "network" => PluginPermission::Network,
         "player.overlay" => PluginPermission::PlayerOverlay,
         "cli" => PluginPermission::Cli,
+        "picture.upscaler" => PluginPermission::PictureUpscaler,
+        "picture.filter" => PluginPermission::PictureFilter,
         _ => return None,
     })
 }

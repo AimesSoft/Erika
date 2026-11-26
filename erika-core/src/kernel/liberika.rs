@@ -7,7 +7,10 @@
 //! that view's display frames, keeps the audio going while no view shows
 //! it, and reports what it sees to the hub and to the engine.
 
-use super::{Chapter, DanmakuConfig, Kernel, Operation, OperationResult, PLAYER, Playback, Track};
+use super::{
+    Chapter, DanmakuConfig, FilterTarget, Kernel, KernelShaderStatus, KernelUpscalerCapabilities,
+    KernelUpscalerDescriptor, Operation, OperationResult, PLAYER, Playback, Track, UpscalerTarget,
+};
 use bern::media::kernel::{
     self as bern_kernel, ExecOp, ExecRequest, FrameTiming, KernelHub, MediaCapabilities,
     MediaCommand, MediaExecutor, MediaKernel, Observation, Phase, SurfaceHandle, SurfaceKind,
@@ -16,15 +19,16 @@ use bern::media::kernel::{
 #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 use bern::media::kernel::{FrameSink, VideoFrame};
 use bern::{CommandError, Value};
-use erika_protocol::erika::Enhancement;
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
 use liberika::MetalSurfaceHandle;
+use liberika::core::LumaUpscalerBackendStatus;
 use liberika::danmaku::{
     DanmakuColor, DanmakuItem, DanmakuLayoutConfig, DanmakuMode, DanmakuTimeline,
     DanmakuTrackSource,
 };
 use liberika::presenter::{PresenterConfig, PresenterRuntime};
-use liberika::renderer::pipeline::LumaUpscalerMode;
+use liberika::renderer::pipeline::{LumaUpscalerMode, UpscalerCapabilities};
+use liberika::renderer::post_process::{PostProcessRuntimeInfo, PostProcessStatus};
 #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 use liberika::{FlutterTextureHandle, FlutterTextureKind};
 use liberika::{
@@ -117,6 +121,7 @@ pub struct Liberika {
     sender: Sender<Message>,
     hub: Hub,
     playback: Arc<Mutex<Playback>>,
+    capabilities: Arc<Mutex<KernelUpscalerCapabilities>>,
     results: Arc<Mutex<Vec<OperationResult>>>,
     frames: Arc<Frames>,
     /// Single-use private open packets, addressed by random handles in the hub.
@@ -169,7 +174,8 @@ enum Setting {
     AddSubtitle(String),
     SubtitleScale(f64),
     SubtitleSupersampling(bool),
-    Upscaler(LumaUpscalerMode),
+    Upscaler(UpscalerTarget),
+    Filter(FilterTarget),
     Capture(PathBuf, Option<u32>, Option<Sender<bool>>),
     Danmaku(DanmakuConfig),
     AddDanmaku(String, DanmakuTimeline),
@@ -190,11 +196,15 @@ impl Liberika {
         let (sender, receiver) = channel();
         let hub: Hub = Arc::default();
         let playback = Arc::new(Mutex::new(Playback::default()));
+        let capabilities = Arc::new(Mutex::new(convert_capabilities(
+            ::liberika::renderer::probe_default_upscalers(),
+        )));
         let results = Arc::new(Mutex::new(Vec::new()));
         let frames = Arc::new(Frames::default());
         let shared = (
             Arc::clone(&hub),
             Arc::clone(&playback),
+            Arc::clone(&capabilities),
             Arc::clone(&frames),
             Arc::clone(&results),
         );
@@ -202,11 +212,12 @@ impl Liberika {
         std::thread::Builder::new()
             .name("liberika".into())
             .spawn(move || {
-                let (hub, playback, frames, results) = shared;
+                let (hub, playback, capabilities, frames, results) = shared;
                 Worker {
                     receiver,
                     hub,
                     playback,
+                    capabilities,
                     results,
                     frames,
                     players: HashMap::new(),
@@ -220,6 +231,7 @@ impl Liberika {
             sender,
             hub,
             playback,
+            capabilities,
             frames,
             results,
             opens: Mutex::default(),
@@ -353,14 +365,16 @@ impl Kernel for Liberika {
         self.send(Message::Set(Setting::SubtitleSupersampling(enabled)));
     }
 
-    fn set_enhancement(&self, enhancement: Enhancement) {
-        let mode = match enhancement {
-            Enhancement::Off => LumaUpscalerMode::Off,
-            Enhancement::ArtCnn => LumaUpscalerMode::ArtCnnC4F16,
-            Enhancement::ArtCnnQuality => LumaUpscalerMode::ArtCnnC4F32,
-            Enhancement::ArtCnnDenoise => LumaUpscalerMode::ArtCnnC4F16Ds,
-        };
-        self.send(Message::Set(Setting::Upscaler(mode)));
+    fn upscaler_capabilities(&self) -> KernelUpscalerCapabilities {
+        self.capabilities.lock().expect("capabilities lock").clone()
+    }
+
+    fn set_enhancement(&self, target: UpscalerTarget) {
+        self.send(Message::Set(Setting::Upscaler(target)));
+    }
+
+    fn set_filter(&self, target: FilterTarget) {
+        self.send(Message::Set(Setting::Filter(target)));
     }
 
     fn set_danmaku(&self, config: &DanmakuConfig) {
@@ -513,8 +527,126 @@ struct Settings {
     hardware_decode: Option<bool>,
     subtitle_scale: Option<f64>,
     subtitle_supersampling: bool,
-    upscaler: LumaUpscalerMode,
+    upscaler: UpscalerTarget,
+    filter: FilterTarget,
     danmaku: Option<DanmakuConfig>,
+}
+
+fn convert_capabilities(caps: UpscalerCapabilities) -> KernelUpscalerCapabilities {
+    KernelUpscalerCapabilities {
+        modes: caps
+            .modes
+            .into_iter()
+            .map(|desc| KernelUpscalerDescriptor {
+                id: desc.id.to_string(),
+                group_id: desc.group_id.to_string(),
+                group_name: desc.group_name.to_string(),
+                name: desc.name,
+            })
+            .collect(),
+        supports_custom_network: caps.supports_custom_network,
+        supports_post_process: caps.supports_post_process,
+    }
+}
+
+fn engine_display_name(
+    backend: LumaUpscalerBackendStatus,
+    engine: Option<&'static str>,
+) -> String {
+    match engine {
+        Some("metal4_tensor_ops") => return "Metal Tensor Ops".into(),
+        Some("simdgroup_matrix") => return "Simdgroup Matrix".into(),
+        Some("cooperative_matrix") => return "Cooperative Matrix".into(),
+        Some("linalg_matrix") => return "D3D12 Linalg".into(),
+        Some("metalfx_spatial") => return "MetalFX".into(),
+        Some("vt_low_latency_super_resolution") => return "VideoToolbox".into(),
+        Some("nvidia_rtx_video") => return "NVIDIA RTX Video".into(),
+        Some("intel_vsr") => return "Intel VSR".into(),
+        Some("fsr1" | "wgpu_fsr1_fused") => return "FSR 1.0".into(),
+        Some("wgpu_f16") => return "wgpu FP16".into(),
+        Some("wgpu_f32") => return "wgpu FP32".into(),
+        Some("scalar" | "scalar_compute") => return "Scalar Compute".into(),
+        _ => {}
+    }
+    match backend {
+        LumaUpscalerBackendStatus::Off | LumaUpscalerBackendStatus::Inactive => String::new(),
+        LumaUpscalerBackendStatus::Building => String::new(),
+        LumaUpscalerBackendStatus::Scalar => "Scalar Compute".into(),
+        LumaUpscalerBackendStatus::SimdgroupMatrix => "Simdgroup Matrix".into(),
+        LumaUpscalerBackendStatus::CooperativeMatrix => "Cooperative Matrix".into(),
+        LumaUpscalerBackendStatus::LinalgMatrix => "D3D12 Linalg".into(),
+        LumaUpscalerBackendStatus::VideoProcessor => "Video Processor".into(),
+        LumaUpscalerBackendStatus::VideoToolbox => "VideoToolbox".into(),
+        LumaUpscalerBackendStatus::MetalFx => "MetalFX".into(),
+        LumaUpscalerBackendStatus::TensorOps => "Metal Tensor Ops".into(),
+    }
+}
+
+fn upscaler_status_from_presenter(presenter: &PresenterRuntime) -> KernelShaderStatus {
+    let stats = presenter.renderer_runtime_stats();
+    let (reason, engine) = presenter.upscaler_status_detail();
+    let backend = stats.upscaler_backend;
+    let active = !matches!(
+        backend,
+        LumaUpscalerBackendStatus::Off
+            | LumaUpscalerBackendStatus::Inactive
+            | LumaUpscalerBackendStatus::Building
+    );
+    let gpu_ms = (active && !stats.last_gpu_duration.is_zero())
+        .then(|| stats.last_gpu_duration.as_secs_f64() * 1000.0);
+    KernelShaderStatus {
+        active,
+        building: backend == LumaUpscalerBackendStatus::Building,
+        inactive: stats.upscaler_mode.is_enabled() && backend == LumaUpscalerBackendStatus::Inactive,
+        engine: engine_display_name(backend, engine),
+        reason: reason.unwrap_or_default(),
+        gpu_ms,
+    }
+}
+
+fn filter_status_from_info(info: PostProcessRuntimeInfo) -> KernelShaderStatus {
+    let active = info.status == PostProcessStatus::Active;
+    let gpu_ms = (active && !info.last_gpu_duration.is_zero())
+        .then(|| info.last_gpu_duration.as_secs_f64() * 1000.0);
+    KernelShaderStatus {
+        active,
+        building: info.status == PostProcessStatus::Building,
+        inactive: info.status == PostProcessStatus::Inactive,
+        engine: info.name.unwrap_or_default(),
+        reason: info.reason.unwrap_or_default(),
+        gpu_ms,
+    }
+}
+
+fn apply_upscaler_target(presenter: &mut PresenterRuntime, target: &UpscalerTarget) -> Result<(), PlayerError> {
+    match target {
+        UpscalerTarget::Off => {
+            presenter.set_luma_upscaler(LumaUpscalerMode::Off);
+            presenter.clear_custom_upscaler_model();
+            Ok(())
+        }
+        UpscalerTarget::Builtin(label) => {
+            presenter.clear_custom_upscaler_model();
+            let mode = LumaUpscalerMode::from_label(label).unwrap_or(LumaUpscalerMode::Off);
+            presenter.set_luma_upscaler(mode);
+            Ok(())
+        }
+        UpscalerTarget::Custom { name, bytes, .. } => {
+            presenter.load_custom_upscaler_model(name, bytes)?;
+            presenter.set_luma_upscaler(LumaUpscalerMode::Custom);
+            Ok(())
+        }
+    }
+}
+
+fn apply_filter_target(presenter: &mut PresenterRuntime, target: &FilterTarget) -> Result<(), PlayerError> {
+    match target {
+        FilterTarget::Off => {
+            presenter.clear_post_process_shader();
+            Ok(())
+        }
+        FilterTarget::Shader { name, bytes, .. } => presenter.load_post_process_shader(name, bytes),
+    }
 }
 
 /// liberika's layout configuration for Erika's danmaku settings.
@@ -753,6 +885,9 @@ impl Session {
             audio_track: self.selection.audio,
             subtitle_track: self.selection.subtitle,
             video,
+            capabilities: Some(convert_capabilities(self.presenter.supported_upscalers())),
+            upscaler_status: upscaler_status_from_presenter(&self.presenter),
+            filter_status: filter_status_from_info(self.presenter.post_process_status()),
             still: self.still.clone(),
             error: observation.error.clone(),
         }
@@ -1137,6 +1272,7 @@ struct Worker {
     receiver: Receiver<Message>,
     hub: Hub,
     playback: Arc<Mutex<Playback>>,
+    capabilities: Arc<Mutex<KernelUpscalerCapabilities>>,
     results: Arc<Mutex<Vec<OperationResult>>>,
     frames: Arc<Frames>,
     players: HashMap<String, Session>,
@@ -1474,7 +1610,8 @@ impl Worker {
         if let Some(scale) = self.settings.subtitle_scale {
             session.presenter.set_subtitle_scale(scale);
         }
-        session.presenter.set_luma_upscaler(self.settings.upscaler);
+        let _ = apply_upscaler_target(&mut session.presenter, &self.settings.upscaler);
+        let _ = apply_filter_target(&mut session.presenter, &self.settings.filter);
         session
             .presenter
             .set_subtitle_supersampling(self.settings.subtitle_supersampling);
@@ -1497,7 +1634,8 @@ impl Worker {
             Setting::SubtitleSupersampling(enabled) => {
                 self.settings.subtitle_supersampling = enabled
             }
-            Setting::Upscaler(mode) => self.settings.upscaler = mode,
+            Setting::Upscaler(ref target) => self.settings.upscaler = target.clone(),
+            Setting::Filter(ref target) => self.settings.filter = target.clone(),
             Setting::Danmaku(ref config) => self.settings.danmaku = Some(config.clone()),
             Setting::AudioTrack(_)
             | Setting::SubtitleTrack(_)
@@ -1537,9 +1675,19 @@ impl Worker {
                 session.presenter.set_subtitle_scale(scale);
                 Ok(())
             }
-            Setting::Upscaler(mode) => {
-                session.presenter.set_luma_upscaler(mode);
-                Ok(())
+            Setting::Upscaler(target) => {
+                #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+                {
+                    session.unchanged = 0;
+                }
+                apply_upscaler_target(&mut session.presenter, &target)
+            }
+            Setting::Filter(target) => {
+                #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+                {
+                    session.unchanged = 0;
+                }
+                apply_filter_target(&mut session.presenter, &target)
             }
             Setting::SubtitleSupersampling(enabled) => {
                 session.presenter.set_subtitle_supersampling(enabled);
@@ -1715,7 +1863,11 @@ impl Worker {
             }
             session.reported = Some((observation.phase, Instant::now()));
             if id == PLAYER {
-                *self.playback.lock().expect("playback lock") = session.playback(&observation);
+                let snap = session.playback(&observation);
+                if let Some(caps) = &snap.capabilities {
+                    *self.capabilities.lock().expect("capabilities lock") = caps.clone();
+                }
+                *self.playback.lock().expect("playback lock") = snap;
             }
             if let Some(hub) = &hub {
                 hub.observe(id, session.version, observation);

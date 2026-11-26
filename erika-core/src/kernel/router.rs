@@ -5,8 +5,10 @@
 //! other call, so a window can control what a page plays and the other way
 //! round.
 
-use super::{DanmakuConfig, Kernel, OperationResult, Playback};
-use erika_protocol::erika::Enhancement;
+use super::{
+    DanmakuConfig, FilterTarget, Kernel, KernelUpscalerCapabilities, OperationResult, Playback,
+    UpscalerTarget,
+};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -153,8 +155,14 @@ impl Kernel for Router {
     fn set_subtitle_supersampling(&self, enabled: bool) {
         self.active().set_subtitle_supersampling(enabled);
     }
-    fn set_enhancement(&self, enhancement: Enhancement) {
-        self.active().set_enhancement(enhancement);
+    fn upscaler_capabilities(&self) -> KernelUpscalerCapabilities {
+        self.active().upscaler_capabilities()
+    }
+    fn set_enhancement(&self, target: UpscalerTarget) {
+        self.active().set_enhancement(target);
+    }
+    fn set_filter(&self, target: FilterTarget) {
+        self.active().set_filter(target);
     }
     fn set_danmaku(&self, config: &DanmakuConfig) {
         self.active().set_danmaku(config);

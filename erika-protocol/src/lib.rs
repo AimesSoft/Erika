@@ -285,6 +285,10 @@ pub mod erika {
         SyncStorage,
         #[label(tr! { "zh-Hans" => "新番数据源", "en" => "New Shows Source" })]
         SeasonSource,
+        #[label(tr! { "zh-Hans" => "默认超分辨率", "en" => "Default Upscaling" })]
+        DefaultEnhancement,
+        #[label(tr! { "zh-Hans" => "默认画面滤镜", "en" => "Default Picture Filter" })]
+        DefaultFilter,
         #[label(tr! { "zh-Hans" => "可选功能预设", "en" => "Optional Feature Presets" })]
         Presets,
         #[label(tr! { "zh-Hans" => "启用账号", "en" => "Enable Account" })]
@@ -362,6 +366,12 @@ pub mod erika {
         /// Erika's commands and queries directly.
         #[label(tr! { "zh-Hans" => "应用命令", "en" => "Application commands" })]
         Cli,
+        /// Bundled super-resolution models (`.esr` or supported mpv CNN shaders).
+        #[label(tr! { "zh-Hans" => "超分模型", "en" => "Upscaler models" })]
+        PictureUpscaler,
+        /// Bundled RGB post-processing shaders (e.g. CRT filters).
+        #[label(tr! { "zh-Hans" => "画面滤镜", "en" => "Picture filters" })]
+        PictureFilter,
     }
     #[value]
     pub struct PluginTag {
@@ -772,17 +782,65 @@ pub mod erika {
         pub name: String,
     }
 
-    /// liberika's luma upscalers (ArtCNN).
+    /// One selectable upscaler or post-processing filter option discovered
+    /// from liberika or provided by an enabled picture plugin.
     #[value]
-    pub enum Enhancement {
-        #[label(tr! { "zh-Hans" => "关闭", "en" => "Off" })]
-        Off,
-        #[label(tr! { "zh-Hans" => "ArtCNN 2×", "en" => "ArtCNN 2×" })]
-        ArtCnn,
-        #[label(tr! { "zh-Hans" => "ArtCNN 2× 高质量", "en" => "ArtCNN 2× high quality" })]
-        ArtCnnQuality,
-        #[label(tr! { "zh-Hans" => "ArtCNN 2× 降噪", "en" => "ArtCNN 2× denoise" })]
-        ArtCnnDenoise,
+    pub struct EnhancementOption {
+        /// Stable identifier: `"off"`, a liberika mode label (`"artcnn_c4f16"`),
+        /// or `"plugin:<plugin_id>:<entry_id>"`.
+        #[content]
+        pub id: String,
+        /// Sub-page key matching `EnhancementGroup::page_key` (`"u:<group>"` / `"f:<group>"`).
+        #[content]
+        pub page_key: String,
+        /// Sub-page group key (e.g. `"artcnn"`, `"anime4k"`, `"plugin:<plugin_id>"`).
+        #[content]
+        pub group_id: String,
+        /// Short label shown inside a family sub-page.
+        #[content]
+        pub name: String,
+        /// Qualified label shown in flat pickers (e.g. `"ArtCNN · C4F16（轻量）"`).
+        #[content]
+        pub picker_name: String,
+        pub is_plugin: bool,
+    }
+
+    /// One top-level entry in the multi-level enhancement menu.
+    ///
+    /// Groups with a single mode expose `direct_id` so the user can toggle them
+    /// directly without drilling down; multi-mode groups open their sub-page.
+    #[value]
+    pub struct EnhancementGroup {
+        #[content]
+        pub id: String,
+        /// Unique sub-page identifier (`"u:<id>"` or `"f:<id>"`).
+        #[content]
+        pub page_key: String,
+        #[content]
+        pub name: String,
+        #[content]
+        pub direct_id: String,
+        #[content]
+        pub selected_name: String,
+        pub selected: bool,
+        pub is_plugin: bool,
+    }
+
+    /// Runtime execution status of the active upscaler or post-process filter.
+    #[value]
+    pub struct EnhancementStatus {
+        pub active: bool,
+        pub building: bool,
+        pub inactive: bool,
+        #[content]
+        pub engine: String,
+        #[content]
+        pub reason: String,
+        #[content]
+        pub gpu_ms: String,
+        /// Compact formatted telemetry (e.g. `"Metal Tensor Ops · 2.40 ms"`).
+        #[content]
+        pub telemetry: String,
     }
 
     /// How liberika draws danmaku: sliders from 0 to 1 (opacity, size,
@@ -963,7 +1021,35 @@ pub mod erika {
         pub audio_name: String,
         #[content]
         pub video_info: String,
-        pub enhancement: Enhancement,
+        /// Active upscaler id (`"off"`, liberika label, or `"plugin:<plugin>:<entry>"`).
+        #[content]
+        pub enhancement: String,
+        #[content]
+        pub enhancement_name: String,
+        /// All selectable upscalers (`"off"`, built-in detected modes, and plugin models).
+        pub enhancements: Vec<EnhancementOption>,
+        /// Top-level rows for the multi-level upscaler menu.
+        pub enhancement_groups: Vec<EnhancementGroup>,
+        pub has_enhancements: bool,
+        pub enhancement_status: EnhancementStatus,
+        pub enhancement_supports_custom: bool,
+        /// Concise summary of hardware-detected built-in upscaler families.
+        #[content]
+        pub enhancement_capabilities: String,
+        /// Active RGB post-process filter id (`"off"` or `"plugin:<plugin>:<entry>"`).
+        #[content]
+        pub filter: String,
+        #[content]
+        pub filter_name: String,
+        /// All selectable post-process filters (`"off"` and enabled plugin shaders).
+        pub filters: Vec<EnhancementOption>,
+        /// Top-level rows for the multi-level filter menu.
+        pub filter_groups: Vec<EnhancementGroup>,
+        pub has_filters: bool,
+        pub filter_status: EnhancementStatus,
+        pub filter_supports_custom: bool,
+        /// Number of enabled plugins supplying upscaler models or filters.
+        pub picture_plugin_count: i64,
         pub volume: f64,
         pub volume_percent: i64,
         pub subtitle_size: f64,
@@ -1470,7 +1556,10 @@ pub mod erika {
         fn select_subtitle_track(&mut self, id: i64) -> Result<(), CommandError>;
         #[errors("no_such_track")]
         fn select_audio_track(&mut self, id: i64) -> Result<(), CommandError>;
-        fn set_enhancement(&mut self, value: Enhancement) -> Result<(), CommandError>;
+        fn set_enhancement(&mut self, value: String) -> Result<(), CommandError>;
+        fn set_filter(&mut self, value: String) -> Result<(), CommandError>;
+        /// Open Settings › Plugins filtered to the Picture category.
+        fn open_picture_plugins(&mut self) -> Result<(), CommandError>;
         fn set_subtitle_supersampling(&mut self, enabled: bool) -> Result<(), CommandError>;
         fn set_player_number(&mut self, key: String, value: f64) -> Result<(), CommandError>;
         /// Preview volume without writing a preference for every gesture frame.

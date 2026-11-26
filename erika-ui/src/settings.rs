@@ -205,7 +205,7 @@ pub fn settings_page(
                 #[cfg(feature = "bern-module-downloads")]
                 SettingsPage::Downloads => { settings_module_placeholder(app: app) }
                 #[cfg(feature = "bern-module-enhance")]
-                SettingsPage::Enhance => { settings_module_placeholder(app: app) }
+                SettingsPage::Enhance => { settings_enhance(app: app) }
                 SettingsPage::Optional => { settings_optional(app: app) }
                 SettingsPage::Plugins => { settings_plugins(app: app) }
                 SettingsPage::Keys => { settings_keys(app: app) }
@@ -808,6 +808,55 @@ pub fn settings_anime(anime: anime::Client) -> impl View {
     }
 }
 
+/// 「设置 › 画质增强」: default upscaler & filter selection, hardware-detected
+/// capabilities summary, and entry to Picture plugins.
+#[cfg(feature = "bern-module-enhance")]
+#[component]
+pub fn settings_enhance(app: erika::Client) -> impl View {
+    ui! {
+        Form(title: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, variant: settings_form, appear: settings_page_in) {
+            Section(title: tr! { "zh-Hans" => "默认", "en" => "Defaults" }) {
+                Picker(id: default_enhancement, label: tr! { "zh-Hans" => "默认超分辨率", "en" => "Default upscaling" }, items: app.player.enhancements, key: id, item_label: picker_name, selected: app.player.enhancement, style: menu) => app.set_enhancement(app.player.enhancement)
+                if app.player.filter_supports_custom {
+                    Picker(id: default_filter, label: tr! { "zh-Hans" => "默认画面滤镜", "en" => "Default picture filter" }, items: app.player.filters, key: id, item_label: picker_name, selected: app.player.filter, style: menu) => app.set_filter(app.player.filter)
+                }
+            }
+            if app.player.enhancement_capabilities != "" || (app.player.enhancement_status.active && app.player.enhancement_status.telemetry != "") {
+                Section(title: tr! { "zh-Hans" => "已检测能力", "en" => "Detected Capabilities" }) {
+                    if app.player.enhancement_capabilities != "" {
+                        Row(gap: 12, align: center) {
+                            Text(content: tr! { "zh-Hans" => "内置超分", "en" => "Built-in upscalers" }, style: body)
+                            Spacer
+                            Text(content: app.player.enhancement_capabilities, style: body, emphasis: secondary, lines: 2)
+                        }
+                    }
+                    if app.player.enhancement_status.active && app.player.enhancement_status.telemetry != "" {
+                        Row(gap: 12, align: center) {
+                            Text(content: tr! { "zh-Hans" => "当前加速", "en" => "Active acceleration" }, style: body)
+                            Spacer
+                            Text(content: app.player.enhancement_status.telemetry, style: body, emphasis: secondary, lines: 1)
+                        }
+                    }
+                }
+            }
+            if app.features.plugins && (app.player.enhancement_supports_custom || app.player.filter_supports_custom) {
+                Section(title: tr! { "zh-Hans" => "扩展", "en" => "Extensions" }) {
+                    Row(gap: 12, align: center) {
+                        Text(content: tr! { "zh-Hans" => "已启用画面插件", "en" => "Enabled picture plugins" }, style: body)
+                        Spacer
+                        Text(content: tr! { "zh-Hans" => "{count} 个", "en" => "{count}"; count: app.player.picture_plugin_count }, style: body, emphasis: secondary)
+                    }
+                    Row(gap: 12, align: center) {
+                        Text(content: tr! { "zh-Hans" => "模型与滤镜插件", "en" => "Model and filter plugins" }, style: body)
+                        Spacer
+                        Button(id: enhance_open_plugins, label: tr! { "zh-Hans" => "插件市场", "en" => "Marketplace" }, prominence: plain) => app.open_picture_plugins()
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 pub fn settings_module_placeholder(app: erika::Client) -> impl View {
     ui! {
@@ -1006,7 +1055,7 @@ pub fn settings_enhance_module(app: erika::Client) -> impl View {
             }
             Column(gap: 1) {
                 Text(content: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, style: body)
-                Text(content: tr! { "zh-Hans" => "ArtCNN 超分辨率", "en" => "ArtCNN upscaling" }, style: caption, emphasis: secondary)
+                Text(content: tr! { "zh-Hans" => "超分辨率与画面滤镜", "en" => "Upscaling and picture filters" }, style: caption, emphasis: secondary)
             }
             Spacer
             Switch(id: feature_enhance, label: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, checked: app.features.enhance, style: switch, label_hidden: true) => app.set_module("enhance", app.features.enhance)

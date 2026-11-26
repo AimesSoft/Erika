@@ -74,6 +74,10 @@ pub fn phone_shell(
     #[session] draft: ErikaDraft,
 ) -> impl View {
     ui! {
+        Stack {
+        if app.settings_open_revision > 0 && app.settings_page == SettingsPage::Plugins {
+            Watch(value: app.settings_open_revision) => draft.phone_settings.set(PhoneSettings::Plugins)
+        }
         // Settings replace the whole tab shell, so the hidden pages cannot
         // be switched underneath them. Closing restores the selected tab.
         if draft.phone_settings != PhoneSettings::Closed {
@@ -119,6 +123,7 @@ pub fn phone_shell(
             TabAccessory(shown: app.playing && !app.expanded) {
                 phone_mini_player(app: app)
             }
+        }
         }
         }
     }
@@ -687,7 +692,7 @@ pub fn phone_settings_section(
             #[cfg(feature = "bern-module-downloads")]
             PhoneSettings::Downloads => { settings_module_placeholder(app: app) }
             #[cfg(feature = "bern-module-enhance")]
-            PhoneSettings::Enhance => { settings_module_placeholder(app: app) }
+            PhoneSettings::Enhance => { settings_enhance(app: app) }
             PhoneSettings::Optional => { settings_optional(app: app) }
             PhoneSettings::Plugins => { settings_plugins(app: app) }
             PhoneSettings::Keys => { settings_keys(app: app) }

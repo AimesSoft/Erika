@@ -333,15 +333,64 @@ pub fn install(listing: &Listing) -> Result<Pack, String> {
             let declared: Value = serde_json::from_slice(&pack_json)
                 .map_err(|error| format!("pack.json：{error}"))?;
             let pack = Pack::from_pack(&declared)?;
-            let script = resource(&format!("{address}/{}", pack.main), Resource::Script)?;
+            let script = if pack.main.is_empty() {
+                None
+            } else {
+                Some(resource(&format!("{address}/{}", pack.main), Resource::Script)?)
+            };
             let image = match &pack.image {
                 Some(image) => Some(resource(&format!("{address}/{image}"), Resource::Image)?),
                 None => None,
             };
             let readme = readme(&format!("{address}/README.md")).ok();
-            place(&pack, &script, image.as_deref(), readme.as_deref())
+            let mut assets = Vec::new();
+            for file in pack.shader_files() {
+                let bytes = resource(&format!("{address}/{file}"), Resource::Script)?;
+                assets.push((file, bytes));
+            }
+            validate_pack_shaders(&pack, |name| {
+                assets
+                    .iter()
+                    .find(|(file, _)| file == name)
+                    .map(|(_, bytes)| bytes.clone())
+                    .ok_or_else(|| format!("插件里没有 {name}"))
+            })?;
+            place(
+                &pack,
+                script.as_deref(),
+                image.as_deref(),
+                readme.as_deref(),
+                &assets,
+            )
         }
     }
+}
+
+/// Validates every upscaler network and post-process shader declared in `pack`
+/// before committing the plugin to disk.
+fn validate_pack_shaders(
+    pack: &Pack,
+    mut read_file: impl FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Result<(), String> {
+    for entry in &pack.upscalers {
+        let bytes = read_file(&entry.file)?;
+        if bytes.is_empty() {
+            return Err(format!("超分模型文件 {} 为空", entry.file));
+        }
+        #[cfg(liberika_kernel)]
+        ::liberika::renderer::validate_custom_upscaler_model(&entry.name, &bytes)
+            .map_err(|error| format!("超分模型「{}」无效：{error}", entry.name))?;
+    }
+    for entry in &pack.filters {
+        let bytes = read_file(&entry.file)?;
+        if bytes.is_empty() {
+            return Err(format!("滤镜着色器文件 {} 为空", entry.file));
+        }
+        #[cfg(liberika_kernel)]
+        ::liberika::renderer::validate_post_process_shader(&entry.name, &bytes)
+            .map_err(|error| format!("画面滤镜「{}」无效：{error}", entry.name))?;
+    }
+    Ok(())
 }
 
 /// Install a NipaPlay script under the declaration it was listed with,
@@ -350,7 +399,7 @@ pub fn install(listing: &Listing) -> Result<Pack, String> {
 pub fn install_script(pack: &Pack, script: &[u8], readme: Option<&[u8]>) -> Result<Pack, String> {
     let mut pack = pack.clone();
     pack.main = "main.js".into();
-    place(&pack, script, None, readme)
+    place(&pack, Some(script), None, readme, &[])
 }
 
 /// Install a plugin the user picked: a folder with `pack.json`, or a
@@ -361,8 +410,14 @@ pub fn import_folder(path: &Path) -> Result<Pack, String> {
     )
     .map_err(|error| format!("pack.json：{error}"))?;
     let pack = Pack::from_pack(&declared)?;
-    let script =
-        std::fs::read(path.join(&pack.main)).map_err(|_| format!("文件夹里没有 {}", pack.main))?;
+    let script = if pack.main.is_empty() {
+        None
+    } else {
+        Some(
+            std::fs::read(path.join(&pack.main))
+                .map_err(|_| format!("文件夹里没有 {}", pack.main))?,
+        )
+    };
     let image = match &pack.image {
         Some(image) => {
             Some(std::fs::read(path.join(image)).map_err(|_| format!("文件夹里没有 {image}"))?)
@@ -370,7 +425,25 @@ pub fn import_folder(path: &Path) -> Result<Pack, String> {
         None => None,
     };
     let readme = std::fs::read(path.join("README.md")).ok();
-    place(&pack, &script, image.as_deref(), readme.as_deref())
+    let mut assets = Vec::new();
+    for file in pack.shader_files() {
+        let bytes = std::fs::read(path.join(&file)).map_err(|_| format!("文件夹里没有 {file}"))?;
+        assets.push((file, bytes));
+    }
+    validate_pack_shaders(&pack, |name| {
+        assets
+            .iter()
+            .find(|(file, _)| file == name)
+            .map(|(_, bytes)| bytes.clone())
+            .ok_or_else(|| format!("文件夹里没有 {name}"))
+    })?;
+    place(
+        &pack,
+        script.as_deref(),
+        image.as_deref(),
+        readme.as_deref(),
+        &assets,
+    )
 }
 
 /// Install a package the user picked.
@@ -380,7 +453,7 @@ pub fn import_package(path: &Path) -> Result<Pack, String> {
 
 /// Unpack a package into its plugin's folder, replacing what was there:
 /// every file it holds, under the id its `pack.json` declares, once its
-/// script is there and no name leads out of the folder.
+/// script (or picture shaders) are valid and no name leads out of the folder.
 pub fn unpack(package: &[u8]) -> Result<Pack, String> {
     unpack_into(&folder().ok_or("没有可以安装插件的地方")?, package)
 }
@@ -391,9 +464,13 @@ fn unpack_into(root: &Path, package: &[u8]) -> Result<Pack, String> {
     let declared: Value = serde_json::from_slice(&read_entry(&mut archive, "pack.json")?)
         .map_err(|error| format!("pack.json：{error}"))?;
     let pack = Pack::from_pack(&declared)?;
-    if archive.index_for_name(&pack.main).is_none() {
+    if !pack.main.is_empty() && archive.index_for_name(&pack.main).is_none() {
         return Err(format!("插件包里没有 {}", pack.main));
     }
+    if pack.main.is_empty() && !pack.has_picture_shaders() {
+        return Err("插件包缺少入口脚本或着色器声明".into());
+    }
+    validate_pack_shaders(&pack, |name| read_entry(&mut archive, name))?;
     let staging = root.join(format!(".{}.new", pack.id));
     let _ = std::fs::remove_dir_all(&staging);
     let mut total = 0u64;
@@ -432,23 +509,35 @@ fn unpack_into(root: &Path, package: &[u8]) -> Result<Pack, String> {
 /// Write the plugin's files into its folder, replacing what was there.
 fn place(
     pack: &Pack,
-    script: &[u8],
+    script: Option<&[u8]>,
     image: Option<&[u8]>,
     readme: Option<&[u8]>,
+    assets: &[(String, Vec<u8>)],
 ) -> Result<Pack, String> {
     let root = folder().ok_or("没有可以安装插件的地方")?;
     let staging = root.join(format!(".{}.new", pack.id));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|error| error.to_string())?;
     let write = |name: &str, bytes: &[u8]| {
-        std::fs::write(staging.join(name), bytes).map_err(|error| error.to_string())
+        let path = staging.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(path, bytes).map_err(|error| error.to_string())
     };
-    write(&pack.main, script)?;
+    if let Some(bytes) = script
+        && !pack.main.is_empty()
+    {
+        write(&pack.main, bytes)?;
+    }
     if let (Some(name), Some(bytes)) = (&pack.image, image) {
         write(name, bytes)?;
     }
     if let Some(bytes) = readme {
         write("README.md", bytes)?;
+    }
+    for (name, bytes) in assets {
+        write(name, bytes)?;
     }
     write(
         "pack.json",
@@ -568,13 +657,71 @@ mod tests {
 
     #[test]
     fn a_debug_build_lists_the_local_plugins() {
-        // Each package the build carries declares the id it is listed by.
+        let root = std::env::temp_dir().join(format!("erika-local-plugins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // Each package the build carries declares the id it is listed by, and
+        // every bundled picture shader unpacks and passes liberika validation.
         for (id, package) in local::LOCAL_PLUGINS {
             let mut archive = zip::ZipArchive::new(std::io::Cursor::new(*package)).unwrap();
             let declared: Value =
                 serde_json::from_slice(&read_entry(&mut archive, "pack.json").unwrap()).unwrap();
-            assert_eq!(Pack::from_pack(&declared).unwrap().id, *id);
+            let parsed = Pack::from_pack(&declared).unwrap();
+            assert_eq!(parsed.id, *id);
+            if parsed.has_picture_shaders() {
+                let unpacked = unpack_into(&root, package).unwrap_or_else(|err| {
+                    panic!("bundled picture plugin {id} failed validation: {err}")
+                });
+                assert_eq!(unpacked.id, *id);
+            }
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn shader_only_packages_validate_and_reject_broken_shaders() {
+        let root = std::env::temp_dir().join(format!("erika-shader-pack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let pack_json = r#"{
+            "id": "test.crt",
+            "name": "CRT 滤镜",
+            "version": "1.0.0",
+            "category": "picture",
+            "permissions": ["picture.filter"],
+            "filters": [
+                {"id": "lite", "name": "轻度", "group": "CRT 滤镜", "file": "shaders/lite.glsl"}
+            ]
+        }"#;
+        let valid_shader = "//!HOOK MAIN\n//!BIND HOOKED\nvec4 hook() { return HOOKED_tex(HOOKED_pos); }\n";
+        let pack = unpack_into(
+            &root,
+            &package(&[
+                ("pack.json", pack_json),
+                ("shaders/lite.glsl", valid_shader),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(pack.id, "test.crt");
+        assert!(pack.main.is_empty());
+        assert_eq!(pack.filters.len(), 1);
+        assert!(root.join("test.crt/shaders/lite.glsl").is_file());
+
+        // Broken shader fails validation and installs nothing.
+        let broken = unpack_into(
+            &root,
+            &package(&[
+                ("pack.json", pack_json),
+                ("shaders/lite.glsl", "//!HOOK MAIN\nvec4 hook() { broken syntax"),
+            ]),
+        );
+        assert!(broken.is_err());
+
+        // Missing declared shader file also fails cleanly.
+        let missing = unpack_into(&root, &package(&[("pack.json", pack_json)]));
+        assert!(missing.is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

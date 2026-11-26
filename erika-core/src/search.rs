@@ -200,10 +200,17 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
             features.downloads,
         ),
         (
-            I::SyncStorage,
+            I::DefaultEnhancement,
             P::Enhance,
-            "同步与存储 sync and storage",
-            "",
+            "默认超分辨率 default upscaling",
+            "超分 画质增强 artcnn anime4k fsr metalfx videotoolbox vsr 插件 模型",
+            features.enhance,
+        ),
+        (
+            I::DefaultFilter,
+            P::Enhance,
+            "默认画面滤镜 default picture filter",
+            "滤镜 crt 后处理 着色器 shader filter 插件",
             features.enhance,
         ),
         (

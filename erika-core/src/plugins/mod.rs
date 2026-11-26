@@ -114,6 +114,16 @@ pub(crate) struct Extensions {
     pub density: Option<PluginColor>,
 }
 
+/// One upscaler model or post-process filter declared by an enabled plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluginShaderItem {
+    pub full_id: String,
+    pub plugin_id: String,
+    pub group_id: String,
+    pub group_name: String,
+    pub name: String,
+}
+
 /// An installed plugin.
 struct Installed {
     pack: Pack,
@@ -179,7 +189,7 @@ pub(crate) struct Plugins {
     loading: bool,
     error: String,
     busy: Vec<String>,
-    started: bool,
+    pub(crate) started: bool,
     /// Enabled plugins whose context could not start yet, as before the
     /// system's JavaScript host runs.
     waiting: Vec<String>,
@@ -451,6 +461,113 @@ fn text_of(value: &Value, key: &str) -> String {
 }
 
 impl ErikaEngine {
+    pub(crate) fn plugins_upscalers(&self) -> Vec<PluginShaderItem> {
+        if !self.state.features.plugins {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for plugin in &self.plugins.installed {
+            if !self.plugins.enabled(&plugin.pack.id) || !plugin.pack.unsupported().is_empty() {
+                continue;
+            }
+            for entry in &plugin.pack.upscalers {
+                let (group_id, group_name) = if entry.group.is_empty() {
+                    (format!("plugin:{}", plugin.pack.id), plugin.pack.name.clone())
+                } else {
+                    (
+                        format!("plugin:{}:{}", plugin.pack.id, entry.group),
+                        entry.group.clone(),
+                    )
+                };
+                out.push(PluginShaderItem {
+                    full_id: format!("plugin:{}:{}", plugin.pack.id, entry.id),
+                    plugin_id: plugin.pack.id.clone(),
+                    group_id,
+                    group_name,
+                    name: entry.name.clone(),
+                });
+            }
+        }
+        out
+    }
+
+    pub(crate) fn plugins_filters(&self) -> Vec<PluginShaderItem> {
+        if !self.state.features.plugins {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for plugin in &self.plugins.installed {
+            if !self.plugins.enabled(&plugin.pack.id) || !plugin.pack.unsupported().is_empty() {
+                continue;
+            }
+            for entry in &plugin.pack.filters {
+                let (group_id, group_name) = if entry.group.is_empty() {
+                    (format!("plugin:{}", plugin.pack.id), plugin.pack.name.clone())
+                } else {
+                    (
+                        format!("plugin:{}:{}", plugin.pack.id, entry.group),
+                        entry.group.clone(),
+                    )
+                };
+                out.push(PluginShaderItem {
+                    full_id: format!("plugin:{}:{}", plugin.pack.id, entry.id),
+                    plugin_id: plugin.pack.id.clone(),
+                    group_id,
+                    group_name,
+                    name: entry.name.clone(),
+                });
+            }
+        }
+        out
+    }
+
+    pub(crate) fn enabled_picture_plugin_count(&self) -> usize {
+        if !self.state.features.plugins {
+            return 0;
+        }
+        self.plugins
+            .installed
+            .iter()
+            .filter(|plugin| {
+                self.plugins.enabled(&plugin.pack.id)
+                    && plugin.pack.unsupported().is_empty()
+                    && plugin.pack.has_picture_shaders()
+            })
+            .count()
+    }
+
+    pub(crate) fn read_plugin_upscaler(&self, full_id: &str) -> Option<(String, Vec<u8>)> {
+        self.read_plugin_shader(full_id, true)
+    }
+
+    pub(crate) fn read_plugin_filter(&self, full_id: &str) -> Option<(String, Vec<u8>)> {
+        self.read_plugin_shader(full_id, false)
+    }
+
+    fn read_plugin_shader(&self, full_id: &str, upscaler: bool) -> Option<(String, Vec<u8>)> {
+        if !self.state.features.plugins {
+            return None;
+        }
+        let rest = full_id.strip_prefix("plugin:")?;
+        let (plugin_id, entry_id) = rest.split_once(':')?;
+        if !self.plugins.enabled(plugin_id) {
+            return None;
+        }
+        let plugin = self.plugins.find(plugin_id)?;
+        if !plugin.pack.unsupported().is_empty() {
+            return None;
+        }
+        let entries = if upscaler {
+            &plugin.pack.upscalers
+        } else {
+            &plugin.pack.filters
+        };
+        let entry = entries.iter().find(|entry| entry.id == entry_id)?;
+        let path = plugin.dir.join(&entry.file);
+        let bytes = std::fs::read(&path).ok()?;
+        Some((entry.name.clone(), bytes))
+    }
+
     /// Read what is installed and start the enabled ones; read the market.
     fn start_plugins(&mut self) {
         self.plugins.started = true;
@@ -483,6 +600,9 @@ impl ErikaEngine {
         for script in load_js_arguments(std::env::args()) {
             let _ = self.import_plugin_command(MediaSource::file(script));
         }
+        self.refresh_enhancements();
+        self.apply_enhancement();
+        self.apply_filter();
     }
 
     fn refresh_market(&mut self) {
@@ -576,6 +696,17 @@ impl ErikaEngine {
             return;
         }
         let pack = plugin.pack.clone();
+        if pack.main.is_empty() {
+            // Pure declarative shader plugins need no JavaScript runtime.
+            if let Some(plugin) = self.plugins.find_mut(id) {
+                plugin.loaded = true;
+                plugin.error.clear();
+            }
+            self.refresh_enhancements();
+            self.apply_enhancement();
+            self.apply_filter();
+            return;
+        }
         let script = match std::fs::read_to_string(plugin.dir.join(&pack.main)) {
             Ok(script) => script,
             Err(error) => {
@@ -1136,6 +1267,9 @@ impl ErikaEngine {
             }
         }
         self.rerun_plugin_danmaku();
+        self.refresh_enhancements();
+        self.apply_enhancement();
+        self.apply_filter();
         self.show_plugins();
     }
 
@@ -1158,12 +1292,20 @@ impl ErikaEngine {
             for id in ids {
                 self.stop_runtime(&id);
             }
+            for plugin in &mut self.plugins.installed {
+                if plugin.pack.main.is_empty() {
+                    plugin.loaded = false;
+                }
+            }
             self.plugins.waiting.clear();
             if self.plugins.saved.downloader {
                 self.unlock_downloader(false);
             }
         }
         self.rerun_plugin_danmaku();
+        self.refresh_enhancements();
+        self.apply_enhancement();
+        self.apply_filter();
         self.show_plugins();
     }
 
@@ -1406,6 +1548,9 @@ impl ErikaEngine {
         if self.plugins.enabled(&id) {
             self.start_runtime(&id);
         }
+        self.refresh_enhancements();
+        self.apply_enhancement();
+        self.apply_filter();
         self.notify(Notice::PluginAdded { name });
     }
 
@@ -1730,6 +1875,9 @@ impl ErikaEngine {
             self.plugins.open = None;
         }
         self.rerun_plugin_danmaku();
+        self.refresh_enhancements();
+        self.apply_enhancement();
+        self.apply_filter();
         self.show_plugins();
         Ok(())
     }
@@ -1763,6 +1911,9 @@ impl ErikaEngine {
         }
         self.plugins.saved.save(&self.db);
         self.rerun_plugin_danmaku();
+        self.refresh_enhancements();
+        self.apply_enhancement();
+        self.apply_filter();
         self.show_plugins();
         Ok(())
     }

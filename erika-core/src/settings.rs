@@ -237,6 +237,7 @@ impl ErikaEngine {
         self.state.module_count = module_count(selected);
         self.state.preset = preset_of(selected);
         self.apply_enhancement();
+        self.apply_filter();
         self.apply_danmaku();
     }
 }

@@ -63,7 +63,22 @@ pub fn initial() -> PlayerState {
         subtitle_name: String::new(),
         audio_name: String::new(),
         video_info: String::new(),
-        enhancement: Enhancement::Off,
+        enhancement: crate::enhance::OFF_ID.into(),
+        enhancement_name: "关闭".into(),
+        enhancements: Vec::new(),
+        enhancement_groups: Vec::new(),
+        has_enhancements: false,
+        enhancement_status: crate::enhance::default_status(),
+        enhancement_supports_custom: false,
+        enhancement_capabilities: String::new(),
+        filter: crate::enhance::OFF_ID.into(),
+        filter_name: "关闭".into(),
+        filters: Vec::new(),
+        filter_groups: Vec::new(),
+        has_filters: false,
+        filter_status: crate::enhance::default_status(),
+        filter_supports_custom: false,
+        picture_plugin_count: 0,
         volume: 0.7,
         volume_percent: 70,
         subtitle_size: 0.5,
@@ -563,7 +578,8 @@ impl ErikaEngine {
                 kernel.set_rate(self.rate());
                 kernel.set_subtitle_scale(subtitle_scale(self.state.player.subtitle_size));
                 kernel.set_subtitle_supersampling(self.state.player.subtitle_supersampling);
-                kernel.set_enhancement(self.enhancement());
+                kernel.set_enhancement(self.resolve_upscaler_target());
+                kernel.set_filter(self.resolve_filter_target());
                 kernel.set_danmaku(&self.danmaku_config());
                 if let Err(reason) = kernel.open_with_headers(&source.url, start, headers) {
                     self.stop_transport();
@@ -709,6 +725,8 @@ impl ErikaEngine {
         }
         self.state.video = false;
         self.source = None;
+        self.state.player.enhancement_status = crate::enhance::default_status();
+        self.state.player.filter_status = crate::enhance::default_status();
         self.refresh_progress_strip();
         self.refresh_danmaku_density();
     }
@@ -722,15 +740,6 @@ impl ErikaEngine {
             .iter()
             .find(|(speed, _)| *speed == self.state.preferences.speed)
             .map_or(1.0, |(_, rate)| *rate)
-    }
-
-    /// The upscaler in use: the chosen one while the enhance module is on.
-    fn enhancement(&self) -> Enhancement {
-        if self.state.features.enhance {
-            self.state.player.enhancement.clone()
-        } else {
-            Enhancement::Off
-        }
     }
 
     /// The rates the speed menu offers: the preference's six and those the
@@ -791,14 +800,6 @@ impl ErikaEngine {
             && let Some(kernel) = self.kernel()
         {
             kernel.set_rate(self.rate());
-        }
-    }
-
-    pub(super) fn apply_enhancement(&mut self) {
-        if self.state.video
-            && let Some(kernel) = self.kernel()
-        {
-            kernel.set_enhancement(self.enhancement());
         }
     }
 
@@ -1035,12 +1036,17 @@ impl ErikaEngine {
             self.state.elapsed = duration;
             self.state.paused = true;
         }
+        if let Some(caps) = playback.capabilities {
+            self.update_kernel_capabilities(caps);
+        }
         let player = &mut self.state.player;
         player.subtitle_tracks = media_tracks(&playback.subtitle_tracks);
         player.audio_tracks = media_tracks(&playback.audio_tracks);
         player.subtitle_track = playback.subtitle_track.unwrap_or(-1);
         player.audio_track = playback.audio_track.unwrap_or(-1);
         player.video_info = playback.video;
+        player.enhancement_status = crate::enhance::format_status(&playback.upscaler_status);
+        player.filter_status = crate::enhance::format_status(&playback.filter_status);
         name_tracks(player);
         self.update_chapter_position();
         self.refresh_progress_strip();
@@ -1349,8 +1355,11 @@ pub(crate) mod tests {
         fn set_subtitle_supersampling(&self, enabled: bool) {
             self.call(format!("subtitle supersampling {enabled}"))
         }
-        fn set_enhancement(&self, enhancement: Enhancement) {
+        fn set_enhancement(&self, enhancement: crate::kernel::UpscalerTarget) {
             self.call(format!("enhance {enhancement:?}"))
+        }
+        fn set_filter(&self, filter: crate::kernel::FilterTarget) {
+            self.call(format!("filter {filter:?}"))
         }
         fn set_danmaku(&self, config: &crate::kernel::DanmakuConfig) {
             self.call(format!(
@@ -1480,7 +1489,7 @@ pub(crate) mod tests {
     #[test]
     fn subtitle_quality_is_independent_from_picture_enhancement_and_saved() {
         let (mut e, kernel) = with_kernel();
-        assert_eq!(e.state.player.enhancement, Enhancement::Off);
+        assert_eq!(e.state.player.enhancement, "off");
         assert!(e.state.player.subtitle_supersampling);
         e.open_file(MediaSource::new("file:///Videos/a.mkv"))
             .unwrap();

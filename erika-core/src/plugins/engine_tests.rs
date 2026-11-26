@@ -346,7 +346,8 @@ impl crate::kernel::Kernel for Shown {
     fn add_subtitle(&self, _url: &str) {}
     fn set_subtitle_scale(&self, _scale: f64) {}
     fn set_subtitle_supersampling(&self, _enabled: bool) {}
-    fn set_enhancement(&self, _enhancement: Enhancement) {}
+    fn set_enhancement(&self, _target: crate::kernel::UpscalerTarget) {}
+    fn set_filter(&self, _target: crate::kernel::FilterTarget) {}
     fn set_danmaku(&self, _config: &crate::kernel::DanmakuConfig) {}
     fn add_danmaku(&self, name: &str, contents: &str) -> Result<usize, String> {
         let comments: Value = serde_json::from_str(contents).map_err(|e| e.to_string())?;
