@@ -23,6 +23,6 @@ erika-dandanplay = { path = "erika-dandanplay" }
 erika-torrent = { path = "erika-torrent" }
 # Remote builds use the pinned source revision; .cargo/config.toml can patch
 # this to a local checkout. See docs/dependencies.md.
-liberika = { package = "erika", git = "https://github.com/AimesSoft/liberika", rev = "35bf0017d00383a7daacb9980605a2e8e1dbf33f" }
+liberika = { package = "erika", git = "https://github.com/AimesSoft/liberika", rev = "1a0333ac9c94f3d74c4711b86c2f4fb6197c51c4" }
 # The playback half of the plugin interface, without native libraries.
-liberika-plugin = { package = "erika_plugin", git = "https://github.com/AimesSoft/liberika", rev = "35bf0017d00383a7daacb9980605a2e8e1dbf33f" }
+liberika-plugin = { package = "erika_plugin", git = "https://github.com/AimesSoft/liberika", rev = "1a0333ac9c94f3d74c4711b86c2f4fb6197c51c4" }
