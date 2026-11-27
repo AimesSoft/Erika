@@ -49,7 +49,7 @@ pub fn player(
             if window.tv {
                 Stack(under_bars: true) {
                     ScaleBox(width: 1280, height: 720) {
-                        player_tv_scene(app: app, players: players, shown: !app.player.loading.active && (!window.idle || app.paused || app.matching.open || app.player.panel || draft.enhancement_open || draft.saying))
+                        player_tv_scene(app: app, players: players, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.enhancement_open || draft.saying)
                     }
                 }
             } else if window.tabletop {
@@ -57,7 +57,7 @@ pub fn player(
             } else if window.short || window.compact || window.medium {
                 Stack(under_bars: true, variant: player_black) {
                     ScaleBox(width: 844, height: 390) {
-                        player_scene(app: app, players: players, windows: windows, shown: !app.player.loading.active && ((if window.touch { !draft.touch_hidden } else { !window.idle }) || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open))
+                        player_scene(app: app, players: players, windows: windows, shown: (if window.touch { !draft.touch_hidden } else { !window.idle }) || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
                     }
                 }
             } else {
@@ -104,11 +104,8 @@ pub fn player(
                             MenuItem(id: ctx_close, label: tr! { "zh-Hans" => "停止播放", "en" => "Stop playback" }, icon: "xmark") => app.close_player()
                         }
                     } => app.toggle_pause()
-                    player_desktop_hud(app: app, windows: windows, shown: !app.player.loading.active && (!window.idle || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open))
+                    player_desktop_hud(app: app, windows: windows, shown: !window.idle || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
                 }
-            }
-            if app.player.loading.active {
-                player_loading_overlay(app: app)
             }
             if let Some(notice) = app.notice {
                 Toast(content: notice, key: app.notice_revision, duration: 3)
@@ -1657,130 +1654,24 @@ pub fn player_matching(app: erika::Client, #[session] draft: PlayerDraft) -> imp
     }
 }
 
-/// Pre-playback loading screen modeled after NipaPlay's LoadingOverlay:
-/// ambient cover backdrop, two-column desktop/TV card (vertical on phone)
-/// with poster/title on one side and live recognition/danmaku steps on the
-/// other, plus a direct "Play now" bypass button.
+/// Native modal shown while waiting for online danmaku before starting playback.
 #[component]
-pub fn player_loading_overlay(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+pub fn danmaku_preload_dialog(app: erika::Client) -> impl View {
     ui! {
-        Stack(under_bars: true, appearance: dark, variant: player_loading_backdrop, appear: fade, disappear: fade) {
-            if app.player.loading.cover.url != "" {
-                Image(source: app.player.loading.cover, fit: cover, label: app.title)
-                Canvas {
-                    Shape(kind: rect, fill: surface.canvas, opacity: 0.72)
-                }
-                Canvas {
-                    Shape(kind: rect, fill_from: app.player.loading.cover, opacity: 0.22)
-                }
-            }
-            Column(gap: 0) {
-                Column(gap: 0, variant: player_top_wrap) {
-                    Row(gap: 0, variant: player_top_row, align: top) {
-                        player_top_back_shortcut(app: app)
-                        if !window.fullscreen && !(window.short || window.compact || window.medium || window.tv) {
-                            WindowButtons
-                        }
-                        player_top_back_button(app: app, desktop: !(window.short || window.compact || window.medium || window.tv))
+        if app.player.loading.active {
+            Modal(width: 360, appear: pop_in, disappear: fade) {
+                Column(gap: 14, padding: 20) {
+                    if app.player.loading.title != "" {
+                        Text(content: app.player.loading.title, style: title3, lines: 2)
+                    }
+                    Progress(label: app.player.loading.stage)
+                    Row(gap: 10, align: center) {
                         Spacer
-                        if !window.fullscreen && !(window.short || window.compact || window.medium || window.tv) {
-                            WindowButtons(edge: trailing)
-                        }
+                        Button(id: cancel_danmaku_preload, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shortcut: app.keys.back) => app.cancel_danmaku_preload()
+                        Button(id: skip_danmaku_preload, label: tr! { "zh-Hans" => "直接播放", "en" => "Play now" }, prominence: prominent) => app.skip_danmaku_preload()
                     }
                 }
-                Spacer
-                Row(align: center) {
-                    Spacer
-                    if window.short || window.compact || window.medium {
-                        Stack(variant: player_loading_card, width: 340, height: 296) {
-                            Column(gap: 14, padding: 18) {
-                                Row(gap: 12, align: center) {
-                                    player_loading_cover(app: app, compact: true)
-                                    Column(gap: 4, width: 232) {
-                                        Text(content: app.title, style: headline, lines: 2)
-                                        Text(content: app.subtitle, style: caption, emphasis: secondary, lines: 1)
-                                    }
-                                }
-                                Canvas(height: 1) {
-                                    Shape(kind: rect, fill: control.border, opacity: 0.45)
-                                }
-                                player_loading_steps(app: app, compact: true)
-                            }
-                        }
-                    } else {
-                        Stack(variant: player_loading_card, width: 620, height: 308) {
-                            Row(gap: 20, padding: 24) {
-                                Column(gap: 8, width: 176) {
-                                    player_loading_cover(app: app, compact: false)
-                                    Text(content: app.title, style: headline, lines: 2)
-                                    Text(content: app.subtitle, style: caption, emphasis: secondary, lines: 1)
-                                }
-                                Canvas(width: 1) {
-                                    Shape(kind: rect, fill: control.border, opacity: 0.45)
-                                }
-                                player_loading_steps(app: app, compact: false)
-                            }
-                        }
-                    }
-                    Spacer
-                }
-                Spacer
-            }
-        }
-    }
-}
-
-#[component]
-pub fn player_loading_cover(
-    app: erika::Client,
-    compact: bool,
-) -> impl View {
-    ui! {
-        if compact {
-            if app.player.loading.cover.url != "" {
-                Image(source: app.player.loading.cover, width: 60, height: 80, corner: 10, fit: cover, label: app.title)
-            } else {
-                Stack(variant: player_loading_cover, width: 60, height: 80, align: center) {
-                    Label(title: app.title, icon: "film", display: icon, font_size: 22)
-                }
-            }
-        } else {
-            if app.player.loading.cover.url != "" {
-                Image(source: app.player.loading.cover, width: 120, height: 160, corner: 10, fit: cover, label: app.title)
-            } else {
-                Stack(variant: player_loading_cover, width: 120, height: 160, align: center) {
-                    Label(title: app.title, icon: "film", display: icon, font_size: 32)
-                }
-            }
-        }
-    }
-}
-
-#[component]
-pub fn player_loading_steps(app: erika::Client, compact: bool) -> impl View {
-    ui! {
-        Column(gap: 10, width: if compact { 304 } else { 355 }) {
-            ScrollView(axis: vertical, indicators: hidden) {
-                Column(gap: 10) {
-                    ForEach(items: app.player.loading.steps, key: id) |step| {
-                        if step.done {
-                            Row(gap: 8, align: center) {
-                                Stack(variant: player_accent) {
-                                    Label(title: tr! { "zh-Hans" => "已完成", "en" => "Done" }, icon: "checkmark.circle.fill", display: icon, font_size: 14)
-                                }
-                                Text(content: step.message, style: body, emphasis: secondary, lines: 2)
-                            }
-                        } else {
-                            Progress(label: step.message)
-                        }
-                    }
-                }
-            }
-            Spacer
-            Row(align: center) {
-                Spacer
-                Button(id: skip_danmaku_preload, label: tr! { "zh-Hans" => "直接播放", "en" => "Play now" }, prominence: plain) => app.skip_danmaku_preload()
-            }
+            } => app.cancel_danmaku_preload()
         }
     }
 }

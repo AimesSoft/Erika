@@ -951,40 +951,21 @@ pub mod erika {
         pub episodes: Vec<MatchingItem>,
     }
 
-    /// A single stage line shown in the pre-playback loading overlay while
-    /// waiting for recognition and online danmaku before opening the video.
+    /// Current stage shown in the pre-playback danmaku loading modal.
     #[value]
-    pub enum LoadingMessage {
+    pub enum LoadingStage {
         #[label(tr! { "zh-Hans" => "正在识别视频信息…", "en" => "Recognizing video…" })]
         Recognizing,
-        #[label(tr! { "zh-Hans" => "已识别视频信息", "en" => "Video recognized" })]
-        Recognized,
-        #[label(tr! { "zh-Hans" => "未自动匹配到剧集", "en" => "No automatic match found" })]
-        Unmatched,
         #[label(tr! { "zh-Hans" => "正在加载弹弹play 弹幕…", "en" => "Loading Dandanplay danmaku…" })]
         LoadingDanmaku,
-        #[label(tr! { "zh-Hans" => "已加载 {count} 条弹幕", "en" => "Loaded {count} danmaku" })]
-        DanmakuLoaded { count: i64 },
-        #[label(tr! { "zh-Hans" => "弹幕加载失败，继续播放", "en" => "Danmaku failed to load; continuing playback" })]
-        DanmakuFailed,
-        #[label(tr! { "zh-Hans" => "加载超时，正在启动播放…", "en" => "Timed out; starting playback…" })]
-        TimedOut,
-        #[label(tr! { "zh-Hans" => "正在准备视频播放…", "en" => "Preparing video playback…" })]
-        StartingPlayback,
-    }
-
-    #[value]
-    pub struct LoadingStep {
-        pub id: i64,
-        pub message: LoadingMessage,
-        pub done: bool,
     }
 
     #[value]
     pub struct PlayerLoading {
         pub active: bool,
-        pub cover: MediaSource,
-        pub steps: Vec<LoadingStep>,
+        #[content]
+        pub title: String,
+        pub stage: LoadingStage,
     }
 
     #[value]
@@ -1578,6 +1559,8 @@ pub mod erika {
         fn block_media_match(&mut self) -> Result<(), CommandError>;
         /// Stop waiting for pre-playback danmaku loading and start playing immediately.
         fn skip_danmaku_preload(&mut self) -> Result<(), CommandError>;
+        /// Cancel pre-playback danmaku loading and stay on the current screen.
+        fn cancel_danmaku_preload(&mut self) -> Result<(), CommandError>;
         fn send_danmaku(&mut self, text: String) -> Result<(), CommandError>;
         /// Set a danmaku slider: `opacity`, `font_size`, `speed` (0 to 1)
         /// or `delay` (seconds).

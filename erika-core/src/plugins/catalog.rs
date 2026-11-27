@@ -157,19 +157,12 @@ impl ErikaEngine {
     }
 
     pub(super) fn catalogue_changed(&mut self) {
-        if let Some(file) = self.file {
-            match self.show_catalog(file) {
-                Ok((_, fetched_comments)) => {
-                    if fetched_comments && let Some(p) = self.pending_playback.as_mut() {
-                        p.waiting_comments = true;
-                    }
-                }
-                Err(error) => {
-                    self.notify(Notice::OperationFailed {
-                        reason: error.message,
-                    });
-                }
-            }
+        if let Some(file) = self.file
+            && let Err(error) = self.show_catalog(file)
+        {
+            self.notify(Notice::OperationFailed {
+                reason: error.message,
+            });
         }
         #[cfg(feature = "bern-module-anime")]
         erika_anime_protocol::anime::calls::history_changed();

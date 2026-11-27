@@ -329,121 +329,92 @@ pub(super) enum Found {
         episode: i64,
         result: Result<(String, usize), String>,
     },
+    PreloadResolved {
+        preload_revision: u64,
+        file: FileId,
+        job: String,
+        danmaku_revision: u64,
+        report: erika_catalog::resolve::FileResolution,
+    },
+    PreloadComments {
+        preload_revision: u64,
+        file: FileId,
+        episode: i64,
+        result: Result<(String, usize), String>,
+    },
 }
 
-pub(super) enum RecognizeOutcome {
-    Done,
-    WaitingRecognition,
-    WaitingComments,
+pub(super) enum PreloadRecognition {
+    None,
+    LocalJob(String),
+    PluginSource,
+}
+
+pub(super) fn danmaku_episode_id(danmaku: &erika_catalog::DanmakuBinding) -> Option<i64> {
+    let id = danmaku
+        .reference
+        .id
+        .parse::<i64>()
+        .ok()
+        .filter(|id| *id > 0);
+    match danmaku.reference.provider {
+        erika_catalog::Provider::Dandanplay => id,
+        erika_catalog::Provider::Misaka
+            if erika_dandanplay::custom::server().as_deref()
+                == Some(danmaku.reference.scope.as_str()) =>
+        {
+            id.map(|id| -id)
+        }
+        _ => None,
+    }
 }
 
 impl ErikaEngine {
     /// Start recognizing the video at `source`, whose file was just read.
-    pub(super) fn recognize(
+    pub(super) fn recognize_with_fetch(
         &mut self,
         source: &MediaSource,
         fingerprint: Option<Fingerprint>,
-    ) -> RecognizeOutcome {
+        allow_online_fetch: bool,
+    ) {
         let Some(file) = self.file else {
-            return RecognizeOutcome::Done;
+            return;
         };
-        let fetched_comments = match self.show_catalog(file) {
-            Ok((true, fetched_comments)) => {
-                return if fetched_comments {
-                    RecognizeOutcome::WaitingComments
-                } else {
-                    RecognizeOutcome::Done
-                };
-            }
-            Ok((false, fetched_comments)) => {
-                if fetched_comments && let Some(pending) = self.pending_playback.as_mut() {
-                    pending.waiting_comments = true;
-                }
-                fetched_comments
-            }
+        match self.show_catalog_inner(file, allow_online_fetch) {
+            Ok(true) => return,
+            Ok(false) => {}
             Err(error) => {
                 self.notify(Notice::OperationFailed {
                     reason: error.message,
                 });
-                return RecognizeOutcome::Done;
+                return;
             }
-        };
-        let fallback = if fetched_comments {
-            RecognizeOutcome::WaitingComments
-        } else {
-            RecognizeOutcome::Done
-        };
+        }
         if !self.state.preferences.auto_match {
-            return fallback;
+            return;
         }
         if erika_store::plugin_sources::is_address(&source.url) {
             // The opaque address is not a filename, and an upstream fingerprint
             // is not evidence that this device read the file's bytes.
-            return match self.recognize_source_item(&source.url) {
-                Ok(true) => RecognizeOutcome::WaitingRecognition,
-                Ok(false) => fallback,
-                Err(error) => {
-                    self.notify(Notice::OperationFailed {
-                        reason: error.message,
-                    });
-                    fallback
-                }
-            };
+            if let Err(error) = self.recognize_source_item(&source.url) {
+                self.notify(Notice::OperationFailed {
+                    reason: error.message,
+                });
+            }
+            return;
         }
         let name = source.file_name().unwrap_or_default();
         let directory = bern::files::file_path(&source.url)
             .and_then(|p| p.parent().map(|p| p.to_string_lossy().into_owned()))
             .unwrap_or_default();
-        let prepared = (|| -> erika_store::catalog::Result<_> {
-            let input_revision = self.db.catalog_revision(file)?;
-            let previous = self.db.catalog_file_job(file, erika_store::now())?;
-            if previous.as_ref().is_some_and(|j| {
-                j.input_revision == input_revision
-                    && (matches!(j.state.as_str(), "running" | "pending" | "failed")
-                        || (j.state == "retry" && j.next_attempt > erika_store::now()))
-            }) {
-                return Ok(None);
-            }
-            let job = match previous
-                .filter(|j| j.state == "queued" && j.input_revision == input_revision)
-            {
-                Some(job) => job,
-                None => {
-                    let job = erika_store::catalog::CatalogJob {
-                        id: erika_catalog::MediaId::new().0,
-                        file: Some(file),
-                        input_revision,
-                        phase: "recognition".into(),
-                        state: "queued".into(),
-                        payload: serde_json::json!({"name":name,"directory":directory}).to_string(),
-                        error: String::new(),
-                        next_attempt: 0,
-                    };
-                    self.db.catalog_job_enqueue(&job)?;
-                    job
-                }
-            };
-            let claimed = self.db.catalog_job_transition(
-                &job.id,
-                "queued",
-                "running",
-                "recognition",
-                "",
-                0,
-            )?;
-            if claimed.state != "running" {
-                return Ok(None);
-            }
-            Ok(Some((job.id, self.db.catalog_danmaku_revision(file)?)))
-        })();
-        let (job, danmaku_revision) = match prepared {
+        let (job, danmaku_revision) = match self.prepare_recognition_job(file, &name, &directory) {
             Ok(Some(value)) => value,
-            Ok(None) => return fallback,
+            Ok(None) => return,
             Err(error) => {
                 self.notify(Notice::OperationFailed {
                     reason: error.message,
                 });
-                return fallback;
+                return;
             }
         };
         let (revision, client, inbox) = (
@@ -476,15 +447,136 @@ impl ErikaEngine {
                 waker.wake();
             }
         });
-        RecognizeOutcome::WaitingRecognition
+    }
+
+    pub(super) fn spawn_preload_recognition(
+        &mut self,
+        preload_revision: u64,
+        file: FileId,
+        source: &MediaSource,
+        fingerprint: Option<Fingerprint>,
+    ) -> PreloadRecognition {
+        if !self.state.preferences.auto_match {
+            return PreloadRecognition::None;
+        }
+        if erika_store::plugin_sources::is_address(&source.url) {
+            return match self.recognize_source_item(&source.url) {
+                Ok(true) => {
+                    self.drive_source_metadata();
+                    PreloadRecognition::PluginSource
+                }
+                Ok(false) => PreloadRecognition::None,
+                Err(error) => {
+                    self.notify(Notice::OperationFailed {
+                        reason: error.message,
+                    });
+                    PreloadRecognition::None
+                }
+            };
+        }
+        let name = source.file_name().unwrap_or_default();
+        let directory = bern::files::file_path(&source.url)
+            .and_then(|p| p.parent().map(|p| p.to_string_lossy().into_owned()))
+            .unwrap_or_default();
+        let (job, danmaku_revision) = match self.prepare_recognition_job(file, &name, &directory) {
+            Ok(Some(value)) => value,
+            Ok(None) => return PreloadRecognition::None,
+            Err(error) => {
+                self.notify(Notice::OperationFailed {
+                    reason: error.message,
+                });
+                return PreloadRecognition::None;
+            }
+        };
+        let job_id = job.clone();
+        let (client, inbox) = (self.metadata.clone(), self.found.clone());
+        let waker = bern::wake::waker();
+        erika_catalog::client::spawn(async move {
+            let report = erika_dandanplay::catalog::resolve_file(
+                &client,
+                &name,
+                &directory,
+                fingerprint.as_ref().map(|f| (f.md5.as_str(), f.size)),
+                None,
+                None,
+            )
+            .await;
+            inbox
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(Found::PreloadResolved {
+                    preload_revision,
+                    file,
+                    job,
+                    danmaku_revision,
+                    report,
+                });
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        });
+        PreloadRecognition::LocalJob(job_id)
+    }
+
+    fn prepare_recognition_job(
+        &self,
+        file: FileId,
+        name: &str,
+        directory: &str,
+    ) -> erika_store::catalog::Result<Option<(String, u64)>> {
+        let input_revision = self.db.catalog_revision(file)?;
+        let previous = self.db.catalog_file_job(file, erika_store::now())?;
+        if previous.as_ref().is_some_and(|j| {
+            j.input_revision == input_revision
+                && (matches!(j.state.as_str(), "running" | "pending" | "failed")
+                    || (j.state == "retry" && j.next_attempt > erika_store::now()))
+        }) {
+            return Ok(None);
+        }
+        let job = match previous
+            .filter(|j| j.state == "queued" && j.input_revision == input_revision)
+        {
+            Some(job) => job,
+            None => {
+                let job = erika_store::catalog::CatalogJob {
+                    id: erika_catalog::MediaId::new().0,
+                    file: Some(file),
+                    input_revision,
+                    phase: "recognition".into(),
+                    state: "queued".into(),
+                    payload: serde_json::json!({"name":name,"directory":directory}).to_string(),
+                    error: String::new(),
+                    next_attempt: 0,
+                };
+                self.db.catalog_job_enqueue(&job)?;
+                job
+            }
+        };
+        let claimed = self.db.catalog_job_transition(
+            &job.id,
+            "queued",
+            "running",
+            "recognition",
+            "",
+            0,
+        )?;
+        if claimed.state != "running" {
+            return Ok(None);
+        }
+        Ok(Some((job.id, self.db.catalog_danmaku_revision(file)?)))
     }
 
     /// Content identity and danmaku identity are intentionally read separately.
     /// A metadata outage must not hide an already recognised danmaku track.
-    pub(super) fn show_catalog(
+    pub(super) fn show_catalog(&mut self, file: FileId) -> erika_store::catalog::Result<bool> {
+        self.show_catalog_inner(file, true)
+    }
+
+    fn show_catalog_inner(
         &mut self,
         file: FileId,
-    ) -> erika_store::catalog::Result<(bool, bool)> {
+        allow_online_fetch: bool,
+    ) -> erika_store::catalog::Result<bool> {
         let clock = (
             file,
             self.db.catalog_revision(file)?,
@@ -492,7 +584,6 @@ impl ErikaEngine {
         );
         let binding = self.db.catalog_binding(file)?;
         let decided = binding.is_some();
-        let mut fetched_comments = false;
         self.read_playing_content(clock, binding)?;
         if let Some(danmaku) = self.db.catalog_danmaku(file)? {
             let changed = self
@@ -501,44 +592,32 @@ impl ErikaEngine {
                 .is_none_or(|b| b.revision != danmaku.revision || b.file != file);
             if changed {
                 let track_changed = self.set_file_danmaku(danmaku.clone());
-                let id = danmaku
-                    .reference
-                    .id
-                    .parse::<i64>()
-                    .ok()
-                    .filter(|id| *id > 0);
-                self.episode_playing = match danmaku.reference.provider {
-                    erika_catalog::Provider::Dandanplay => id,
-                    erika_catalog::Provider::Misaka
-                        if erika_dandanplay::custom::server().as_deref()
-                            == Some(danmaku.reference.scope.as_str()) =>
-                    {
-                        id.map(|id| -id)
-                    }
-                    _ => None,
-                };
-                if track_changed && let Some(id) = self.episode_playing {
-                    fetched_comments = self.fetch_online_danmaku(id);
+                self.episode_playing = danmaku_episode_id(&danmaku);
+                if allow_online_fetch && track_changed && let Some(id) = self.episode_playing {
+                    self.fetch_online_danmaku(id);
                 }
             }
         } else if self.danmaku_binding.is_some() {
             self.reset_file_danmaku();
             self.apply_danmaku();
         }
-        Ok((decided, fetched_comments))
+        Ok(decided)
     }
 
-    pub(super) fn fetch_online_danmaku(&mut self, id: i64) -> bool {
-        if !self.state.features.danmaku || (!self.state.video && self.pending_playback.is_none()) {
-            return false;
-        }
-        let remote = self
-            .current_source()
+    fn online_danmaku_remote(&self, source: Option<&MediaSource>) -> Option<String> {
+        source
             .map(|s| self.remote_transport(s).unwrap_or_else(|| s.clone()).url)
             .filter(|s| erika_dandanplay::remote::comment_url(s).is_some())
-            .filter(|_| erika_dandanplay::token().is_none());
+            .filter(|_| erika_dandanplay::token().is_none())
+    }
+
+    pub(super) fn fetch_online_danmaku(&mut self, id: i64) {
+        if !self.state.features.danmaku || !self.state.video {
+            return;
+        }
+        let remote = self.online_danmaku_remote(self.current_source());
         if id > 0 && erika_dandanplay::token().is_none() && remote.is_none() {
-            return false;
+            return;
         }
         self.danmaku_generation += 1;
         let request_generation = self.danmaku_generation;
@@ -558,6 +637,45 @@ impl ErikaEngine {
                 .push(Found::Comments {
                     revision,
                     request_generation,
+                    episode: id,
+                    result,
+                });
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        });
+    }
+
+    pub(super) fn spawn_preload_danmaku(
+        &self,
+        preload_revision: u64,
+        file: FileId,
+        source: &MediaSource,
+        id: i64,
+    ) -> bool {
+        if !self.state.features.danmaku {
+            return false;
+        }
+        let remote = self.online_danmaku_remote(Some(source));
+        if id > 0 && erika_dandanplay::token().is_none() && remote.is_none() {
+            return false;
+        }
+        let inbox = self.found.clone();
+        let waker = bern::wake::waker();
+        erika_catalog::client::spawn(async move {
+            let result = match remote {
+                Some(stream) => erika_dandanplay::remote::comments(&stream),
+                None if id < 0 => erika_dandanplay::custom::comments(id).map_err(|e| e.message),
+                None => erika_dandanplay::catalog::comments(id)
+                    .await
+                    .map_err(|e| e.message),
+            };
+            inbox
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(Found::PreloadComments {
+                    preload_revision,
+                    file,
                     episode: id,
                     result,
                 });
@@ -606,31 +724,60 @@ impl ErikaEngine {
                         .catalog_finish_resolution(&job, danmaku_revision, &report)
                     {
                         Ok(_) => {
-                            match self.show_catalog(file) {
-                                Ok((decided, fetched_comments)) => {
-                                    self.on_preload_recognition_finished(
-                                        file,
-                                        decided,
-                                        fetched_comments,
-                                    );
-                                }
-                                Err(error) => {
-                                    self.notify(Notice::OperationFailed {
-                                        reason: error.message,
-                                    });
-                                    self.on_preload_recognition_finished(file, false, false);
-                                }
+                            if let Err(error) = self.show_catalog(file) {
+                                self.notify(Notice::OperationFailed {
+                                    reason: error.message,
+                                });
                             }
                             #[cfg(feature = "bern-module-anime")]
                             erika_anime_protocol::anime::calls::history_changed();
                             #[cfg(feature = "bern-module-library")]
                             erika_library_protocol::library::calls::history_changed();
                         }
+                        Err(error) => self.notify(Notice::OperationFailed {
+                            reason: error.message,
+                        }),
+                    }
+                }
+                Found::PreloadResolved {
+                    preload_revision,
+                    file,
+                    job,
+                    danmaku_revision,
+                    report,
+                } => {
+                    let active = self.pending_playback.as_ref().is_some_and(|p| {
+                        p.preload_revision == preload_revision
+                            && p.file == file
+                            && p.waiting_recognition
+                    });
+                    if !self.state.preferences.auto_match || !active {
+                        let _ = self.db.catalog_job_transition(
+                            &job,
+                            "running",
+                            "cancelled",
+                            "cancelled",
+                            "播放前加载已取消",
+                            0,
+                        );
+                        continue;
+                    }
+                    match self
+                        .db
+                        .catalog_finish_resolution(&job, danmaku_revision, &report)
+                    {
+                        Ok(_) => {
+                            #[cfg(feature = "bern-module-anime")]
+                            erika_anime_protocol::anime::calls::history_changed();
+                            #[cfg(feature = "bern-module-library")]
+                            erika_library_protocol::library::calls::history_changed();
+                            self.on_preload_recognition_finished(file);
+                        }
                         Err(error) => {
                             self.notify(Notice::OperationFailed {
                                 reason: error.message,
                             });
-                            self.on_preload_recognition_finished(file, false, false);
+                            self.on_preload_recognition_finished(file);
                         }
                     }
                 }
@@ -647,30 +794,34 @@ impl ErikaEngine {
                     {
                         continue;
                     }
-                    if self.pending_playback.is_some() {
-                        match result {
-                            Ok((json, count)) => {
-                                self.preloaded_danmaku = Some((json, count));
-                                self.on_preload_comments_finished(Ok(count));
-                            }
-                            Err(reason) => {
-                                self.notify(Notice::OperationFailed { reason });
-                                self.on_preload_comments_finished(Err(()));
-                            }
-                        }
-                    } else {
-                        match result {
-                            Ok((json, count)) => {
-                                if let Some(kernel) = self.kernel().filter(|_| self.state.video) {
-                                    if self.load_danmaku(&kernel, "弹弹play", &json).is_ok() {
-                                        self.online_danmaku_count = count;
-                                        self.add_danmaku_source("弹弹play".into(), count);
-                                    }
+                    match result {
+                        Ok((json, count)) => {
+                            if let Some(kernel) = self.kernel().filter(|_| self.state.video) {
+                                if self.load_danmaku(&kernel, "弹弹play", &json).is_ok() {
+                                    self.online_danmaku_count = count;
+                                    self.add_danmaku_source("弹弹play".into(), count);
                                 }
                             }
-                            Err(reason) => self.notify(Notice::OperationFailed { reason }),
                         }
+                        Err(reason) => self.notify(Notice::OperationFailed { reason }),
                     }
+                }
+                Found::PreloadComments {
+                    preload_revision,
+                    file,
+                    episode,
+                    result,
+                } => {
+                    let active = self.pending_playback.as_ref().is_some_and(|p| {
+                        p.preload_revision == preload_revision
+                            && p.file == file
+                            && p.episode == Some(episode)
+                            && p.waiting_comments
+                    });
+                    if !active {
+                        continue;
+                    }
+                    self.on_preload_comments_finished(result);
                 }
                 Found::Search { revision, result } => {
                     if revision != self.search_revision {

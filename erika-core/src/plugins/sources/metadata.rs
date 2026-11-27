@@ -281,23 +281,26 @@ impl ErikaEngine {
                         .insert(work.entry.url.clone(), (work.entry.owner, job.next_attempt));
                 }
                 self.catalogue_changed();
-                if let Some(file) = self.file
-                    && self
-                        .current_source()
-                        .is_some_and(|s| s.url == work.entry.url)
-                {
-                    let matched = self.db.catalog_binding(file).ok().flatten().is_some();
-                    self.on_preload_recognition_finished(file, matched, false);
+                if self.pending_playback.as_ref().is_some_and(|p| {
+                    p.waiting_recognition
+                        && p.launch
+                            .source
+                            .as_ref()
+                            .is_some_and(|s| s.url == work.entry.url)
+                }) {
+                    self.on_preload_recognition_finished(work.entry.file);
                 }
             }
             Err(error) => {
                 self.plugin_failed(&work.entry.owner, error.message);
-                if let Some(file) = self.file
-                    && self
-                        .current_source()
-                        .is_some_and(|s| s.url == work.entry.url)
-                {
-                    self.on_preload_recognition_finished(file, false, false);
+                if self.pending_playback.as_ref().is_some_and(|p| {
+                    p.waiting_recognition
+                        && p.launch
+                            .source
+                            .as_ref()
+                            .is_some_and(|s| s.url == work.entry.url)
+                }) {
+                    self.on_preload_recognition_finished(work.entry.file);
                 }
             }
         }

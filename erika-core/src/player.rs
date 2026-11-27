@@ -7,23 +7,41 @@ use crate::kernel::{Playback, Track};
 
 /// How long pre-play danmaku loading waits before starting playback anyway.
 pub(super) const PRELOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-/// Maximum time the "starting playback" handoff stays visible waiting for `playback.loaded`.
-const START_HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
-pub(super) struct PendingPlayback {
-    pub source: MediaSource,
+pub(super) struct PlaybackLaunch {
+    pub title: String,
+    pub subtitle: PlayingNote,
+    pub still: MediaSource,
+    pub progress: f64,
+    pub source: Option<MediaSource>,
     pub start: f64,
     pub entry: Option<bern::Entry>,
+    pub file: Option<erika_store::FileId>,
+    pub fingerprint: Option<erika_store::Fingerprint>,
+    pub recognize: bool,
+    pub from_stage: bool,
+    pub media_playing: Option<erika_catalog::MediaId>,
+    pub from_queue: bool,
+    pub preserve_start_elapsed: bool,
+}
+
+pub(super) struct PendingPlayback {
+    pub launch: PlaybackLaunch,
+    pub file: erika_store::FileId,
+    pub preload_revision: u64,
     pub started_at: web_time::Instant,
     pub waiting_recognition: bool,
     pub waiting_comments: bool,
+    pub recognition_job: Option<String>,
+    pub episode: Option<i64>,
+    pub preloaded_danmaku: Option<(String, usize)>,
 }
 
 pub(super) fn loading_initial() -> PlayerLoading {
     PlayerLoading {
         active: false,
-        cover: no_picture(),
-        steps: Vec::new(),
+        title: String::new(),
+        stage: LoadingStage::Recognizing,
     }
 }
 
@@ -213,65 +231,63 @@ impl ErikaEngine {
             .unwrap_or_else(|| self.source_name(&source));
         let (file, fingerprint) = self.identify(&source);
         let (start, progress) = self.saved_position(file);
-        self.start(title, source_note(&source), no_picture(), progress);
-        self.file = file;
-        self.prepare_queue(&source);
-        self.begin_playback(Some(source), start, entry, fingerprint, true);
-    }
-
-    pub(super) fn clear_loading(&mut self) {
-        self.pending_playback = None;
-        self.loading_started_at = None;
-        self.state.player.loading.active = false;
-        self.state.player.loading.cover = no_picture();
-        self.state.player.loading.steps.clear();
-    }
-
-    pub(super) fn refresh_loading_cover(&mut self) {
-        if !self.state.player.loading.active {
-            return;
-        }
-        if let Some(url) = self.catalog_playback.poster_url() {
-            self.state.player.loading.cover = MediaSource::new(url);
-        } else if !self.state.still.url.is_empty() {
-            self.state.player.loading.cover = self.state.still.clone();
-        }
-    }
-
-    fn loading_push(&mut self, message: LoadingMessage, done: bool) {
-        self.loading_step_seq += 1;
-        self.state.player.loading.steps.push(LoadingStep {
-            id: self.loading_step_seq,
-            message,
-            done,
+        self.launch_playback(PlaybackLaunch {
+            title,
+            subtitle: source_note(&source),
+            still: no_picture(),
+            progress,
+            source: Some(source),
+            start,
+            entry,
+            file,
+            fingerprint,
+            recognize: true,
+            from_stage: false,
+            media_playing: None,
+            from_queue: false,
+            preserve_start_elapsed: false,
         });
     }
 
-    fn loading_finish_step(
-        &mut self,
-        matches: impl Fn(&LoadingMessage) -> bool,
-        replacement: LoadingMessage,
-    ) {
-        if let Some(step) = self
-            .state
-            .player
-            .loading
-            .steps
-            .iter_mut()
-            .rev()
-            .find(|s| !s.done && matches(&s.message))
-        {
-            step.message = replacement;
-            step.done = true;
-        } else {
-            self.loading_push(replacement, true);
+    pub(super) fn cancel_pending_preload(&mut self) {
+        if let Some(pending) = self.pending_playback.take() {
+            self.preload_revision += 1;
+            if let Some(job) = pending.recognition_job {
+                let _ = self.db.catalog_job_transition(
+                    &job,
+                    "running",
+                    "cancelled",
+                    "cancelled",
+                    "播放前加载已取消",
+                    0,
+                );
+            }
         }
+        self.state.player.loading = loading_initial();
     }
 
-    fn can_preload_online_danmaku(&self, source: &MediaSource) -> bool {
+    fn preload_title(&self, file: erika_store::FileId, fallback: &str) -> String {
+        let bound = self
+            .db
+            .catalog_binding(file)
+            .ok()
+            .flatten()
+            .and_then(|binding| binding.items.first().cloned())
+            .and_then(|item| self.db.catalog_node(&item.media).ok().flatten())
+            .and_then(|node| self.db.catalog_node(&node.root).ok().flatten())
+            .map(|root| root.title)
+            .filter(|title| !title.trim().is_empty());
+        bound.unwrap_or_else(|| fallback.to_string())
+    }
+
+    fn can_preload_online_danmaku(
+        &self,
+        source: &MediaSource,
+        file: Option<erika_store::FileId>,
+    ) -> bool {
         if !self.state.preferences.load_danmaku_before_play
             || !self.state.features.danmaku
-            || self.file.is_none()
+            || file.is_none()
         {
             return false;
         }
@@ -288,168 +304,218 @@ impl ErikaEngine {
             || self.remote_transport(source).is_some()
     }
 
-    /// Unified playback start: either starts playback immediately (default)
-    /// or holds video start on a loading overlay while recognition and online
-    /// danmaku load first when `load_danmaku_before_play` is enabled.
-    pub(super) fn begin_playback(
-        &mut self,
-        source: Option<MediaSource>,
-        start: f64,
-        entry: Option<bern::Entry>,
-        fingerprint: Option<erika_store::Fingerprint>,
-        recognize: bool,
-    ) {
-        let Some(source) = source else {
-            self.load_from(None, start, entry);
-            return;
-        };
-        if recognize && self.can_preload_online_danmaku(&source) {
-            self.unload();
-            self.state.paused = true;
-            self.state.elapsed = if start.is_finite() { start.max(0.0) } else { 0.0 };
-            self.state.duration = 0.0;
-            self.state.progress = 0.0;
-            self.state.player.flies_in = false;
-            self.state.player.arriving = false;
-            clear_tracks(&mut self.state.player);
-            self.state.player.loading.active = true;
-            self.state.player.loading.steps.clear();
-            self.refresh_loading_cover();
-            self.pending_playback = Some(PendingPlayback {
-                source: source.clone(),
-                start,
-                entry,
-                started_at: web_time::Instant::now(),
-                waiting_recognition: false,
-                waiting_comments: false,
-            });
-            match self.recognize(&source, fingerprint) {
-                matching::RecognizeOutcome::WaitingRecognition => {
-                    if let Some(pending) = self.pending_playback.as_mut() {
-                        pending.waiting_recognition = true;
-                    }
-                    self.loading_push(LoadingMessage::Recognizing, false);
-                    if erika_store::plugin_sources::is_address(&source.url) {
-                        self.drive_source_metadata();
-                    }
-                }
-                matching::RecognizeOutcome::WaitingComments => {
-                    if let Some(pending) = self.pending_playback.as_mut() {
-                        pending.waiting_comments = true;
-                    }
-                    self.loading_push(LoadingMessage::Recognized, true);
-                    self.loading_push(LoadingMessage::LoadingDanmaku, false);
-                    self.refresh_loading_cover();
-                }
-                matching::RecognizeOutcome::Done => {
-                    self.finish_pending_playback(false);
-                }
-            }
-            return;
-        }
-        self.load_from(Some(source.clone()), start, entry);
-        if recognize {
-            self.recognize(&source, fingerprint);
-        }
-    }
-
-    pub(super) fn on_preload_recognition_finished(
-        &mut self,
-        file: erika_store::FileId,
-        matched: bool,
-        fetched_comments: bool,
-    ) {
-        if self.file != Some(file)
-            || !self
-                .pending_playback
+    /// Unified playback entry: either opens the player immediately (default)
+    /// or keeps the user on the current screen with a native loading modal
+    /// while recognition and online danmaku load first.
+    pub(super) fn launch_playback(&mut self, launch: PlaybackLaunch) {
+        let can_preload = launch.recognize
+            && launch
+                .source
                 .as_ref()
-                .is_some_and(|p| p.waiting_recognition)
-        {
+                .is_some_and(|source| self.can_preload_online_danmaku(source, launch.file));
+        if !can_preload {
+            self.commit_launch(launch, None);
             return;
         }
-        let waiting_comments = if let Some(pending) = self.pending_playback.as_mut() {
-            pending.waiting_recognition = false;
-            if fetched_comments {
-                pending.waiting_comments = true;
+        let source = launch.source.clone().expect("checked above");
+        let file = launch.file.expect("checked above");
+        self.cancel_pending_preload();
+        self.preload_revision += 1;
+        let preload_revision = self.preload_revision;
+
+        let binding = match self.db.catalog_binding(file) {
+            Ok(binding) => binding,
+            Err(error) => {
+                self.notify(Notice::OperationFailed {
+                    reason: error.message,
+                });
+                self.commit_launch(launch, None);
+                return;
             }
-            pending.waiting_comments
-        } else {
-            false
         };
-        self.loading_finish_step(
-            |m| matches!(m, LoadingMessage::Recognizing),
-            if matched || waiting_comments {
-                LoadingMessage::Recognized
+        let danmaku = match self.db.catalog_danmaku(file) {
+            Ok(danmaku) => danmaku,
+            Err(error) => {
+                self.notify(Notice::OperationFailed {
+                    reason: error.message,
+                });
+                None
+            }
+        };
+        let mut episode = danmaku.as_ref().and_then(matching::danmaku_episode_id);
+        let waiting_comments = match episode {
+            Some(id) => self.spawn_preload_danmaku(preload_revision, file, &source, id),
+            None => false,
+        };
+        if !waiting_comments {
+            episode = None;
+        }
+        let (waiting_recognition, recognition_job) = if binding.is_none() {
+            match self.spawn_preload_recognition(
+                preload_revision,
+                file,
+                &source,
+                launch.fingerprint.clone(),
+            ) {
+                matching::PreloadRecognition::None => (false, None),
+                matching::PreloadRecognition::LocalJob(job) => (true, Some(job)),
+                matching::PreloadRecognition::PluginSource => (true, None),
+            }
+        } else {
+            (false, None)
+        };
+        if !waiting_recognition && !waiting_comments {
+            self.commit_launch(launch, None);
+            return;
+        }
+        let title = self.preload_title(file, &launch.title);
+        self.state.player.loading = PlayerLoading {
+            active: true,
+            title,
+            stage: if waiting_recognition {
+                LoadingStage::Recognizing
             } else {
-                LoadingMessage::Unmatched
+                LoadingStage::LoadingDanmaku
             },
-        );
-        self.refresh_loading_cover();
-        if waiting_comments {
-            if !self
-                .state
-                .player
-                .loading
-                .steps
-                .iter()
-                .any(|s| matches!(s.message, LoadingMessage::LoadingDanmaku))
-            {
-                self.loading_push(LoadingMessage::LoadingDanmaku, false);
-            }
-        } else {
-            self.finish_pending_playback(true);
-        }
+        };
+        self.pending_playback = Some(PendingPlayback {
+            launch,
+            file,
+            preload_revision,
+            started_at: web_time::Instant::now(),
+            waiting_recognition,
+            waiting_comments,
+            recognition_job,
+            episode,
+            preloaded_danmaku: None,
+        });
     }
 
-    pub(super) fn on_preload_comments_finished(&mut self, result: Result<usize, ()>) {
-        if self.pending_playback.is_none() {
+    pub(super) fn on_preload_recognition_finished(&mut self, file: erika_store::FileId) {
+        let Some((preload_revision, source, fallback_title, need_danmaku)) =
+            self.pending_playback.as_mut().and_then(|pending| {
+                if pending.file != file || !pending.waiting_recognition {
+                    return None;
+                }
+                pending.waiting_recognition = false;
+                pending.recognition_job = None;
+                Some((
+                    pending.preload_revision,
+                    pending.launch.source.clone()?,
+                    pending.launch.title.clone(),
+                    !pending.waiting_comments && pending.episode.is_none(),
+                ))
+            })
+        else {
+            return;
+        };
+        let title = self.preload_title(file, &fallback_title);
+        if self.state.player.loading.active {
+            self.state.player.loading.title = title;
+        }
+        if need_danmaku
+            && let Ok(Some(danmaku)) = self.db.catalog_danmaku(file)
+            && let Some(id) = matching::danmaku_episode_id(&danmaku)
+            && self.spawn_preload_danmaku(preload_revision, file, &source, id)
+        {
+            if let Some(pending) = self.pending_playback.as_mut() {
+                pending.waiting_comments = true;
+                pending.episode = Some(id);
+            }
+            if self.state.player.loading.active {
+                self.state.player.loading.stage = LoadingStage::LoadingDanmaku;
+            }
             return;
         }
-        let still_recognizing = if let Some(pending) = self.pending_playback.as_mut() {
-            pending.waiting_comments = false;
-            pending.waiting_recognition
-        } else {
-            false
-        };
-        let replacement = match result {
-            Ok(count) => LoadingMessage::DanmakuLoaded {
-                count: count as i64,
-            },
-            Err(()) => LoadingMessage::DanmakuFailed,
-        };
-        self.loading_finish_step(
-            |m| matches!(m, LoadingMessage::LoadingDanmaku),
-            replacement,
-        );
-        if !still_recognizing {
-            self.finish_pending_playback(true);
+        let still_waiting = self
+            .pending_playback
+            .as_ref()
+            .is_some_and(|pending| pending.waiting_comments);
+        if !still_waiting {
+            self.finish_pending_playback();
         }
     }
 
-    pub(super) fn finish_pending_playback(&mut self, show_starting: bool) {
+    pub(super) fn on_preload_comments_finished(
+        &mut self,
+        result: Result<(String, usize), String>,
+    ) {
+        let still_recognizing = match self.pending_playback.as_mut() {
+            Some(pending) => {
+                pending.waiting_comments = false;
+                match result {
+                    Ok(danmaku) => pending.preloaded_danmaku = Some(danmaku),
+                    Err(reason) => {
+                        let waiting = pending.waiting_recognition;
+                        self.notify(Notice::OperationFailed { reason });
+                        if !waiting {
+                            self.finish_pending_playback();
+                        }
+                        return;
+                    }
+                }
+                pending.waiting_recognition
+            }
+            None => return,
+        };
+        if !still_recognizing {
+            self.finish_pending_playback();
+        }
+    }
+
+    pub(super) fn finish_pending_playback(&mut self) {
         let Some(pending) = self.pending_playback.take() else {
             return;
         };
-        if show_starting {
-            self.loading_push(LoadingMessage::StartingPlayback, false);
-            self.loading_started_at = Some(web_time::Instant::now());
-        } else {
-            self.clear_loading();
+        self.preload_revision += 1;
+        if let Some(job) = pending.recognition_job {
+            let _ = self.db.catalog_job_transition(
+                &job,
+                "running",
+                "cancelled",
+                "cancelled",
+                "转为播放后继续识别",
+                0,
+            );
         }
-        self.load_from(Some(pending.source), pending.start, pending.entry);
-        // If transport opening failed immediately or fell back to sample media,
-        // never leave the loading overlay covering the window.
-        if !self.state.video && self.logical_source.is_none() {
-            self.clear_loading();
+        self.state.player.loading = loading_initial();
+        self.commit_launch(pending.launch, pending.preloaded_danmaku);
+    }
+
+    fn commit_launch(&mut self, launch: PlaybackLaunch, preloaded: Option<(String, usize)>) {
+        let entering = !(self.state.playing && self.state.expanded);
+        self.start(launch.title, launch.subtitle, launch.still, launch.progress);
+        if entering {
+            self.state.player.flies_in = launch.from_stage;
+            self.state.player.arriving = launch.from_stage;
+        }
+        self.file = launch.file;
+        if let Some(media) = launch.media_playing {
+            self.media_playing = Some(media);
+        }
+        if launch.preserve_start_elapsed {
+            self.state.elapsed = launch.start;
+        }
+        if let Some(source) = &launch.source {
+            if launch.from_queue {
+                self.publish_queue(source);
+            } else {
+                self.prepare_queue(source);
+            }
+        }
+        let has_preloaded = preloaded.is_some();
+        self.preloaded_danmaku = preloaded;
+        self.load_from(launch.source.clone(), launch.start, launch.entry);
+        if launch.recognize
+            && let Some(source) = &launch.source
+        {
+            self.recognize_with_fetch(source, launch.fingerprint, !has_preloaded);
         }
     }
 
     /// Catalogue consumers must never observe a plugin's short-lived stream URL.
     pub(crate) fn current_source(&self) -> Option<&MediaSource> {
-        self.logical_source
-            .as_ref()
-            .or(self.source.as_ref())
-            .or_else(|| self.pending_playback.as_ref().map(|p| &p.source))
+        self.logical_source.as_ref().or(self.source.as_ref())
     }
 
     pub(super) fn source_name(&self, source: &MediaSource) -> String {
@@ -902,28 +968,19 @@ impl ErikaEngine {
 
     pub(super) fn tick_player(&mut self) {
         self.take_kernel_results();
+        if self
+            .pending_playback
+            .as_ref()
+            .is_some_and(|pending| pending.started_at.elapsed() >= PRELOAD_TIMEOUT)
+        {
+            self.finish_pending_playback();
+        }
         if !self.state.playing {
             return;
         }
         self.feedback_remaining = (self.feedback_remaining - 0.25).max(0.0);
         self.refresh_playing_catalog();
         self.state.player.feedback = self.feedback_remaining > 0.0;
-        if let Some(pending) = &self.pending_playback {
-            if pending.started_at.elapsed() >= PRELOAD_TIMEOUT {
-                self.loading_finish_step(|_| true, LoadingMessage::TimedOut);
-                self.finish_pending_playback(true);
-            } else {
-                return;
-            }
-        }
-        if self.state.player.loading.active
-            && self.pending_playback.is_none()
-            && self
-                .loading_started_at
-                .is_some_and(|at| at.elapsed() >= START_HANDOFF_TIMEOUT)
-        {
-            self.clear_loading();
-        }
         if self.state.video {
             if let Some(kernel) = self.kernel() {
                 self.follow(kernel.playback());
@@ -972,14 +1029,10 @@ impl ErikaEngine {
         self.observe_played(&playback, self.seek_wanted.is_some(), at);
         if playback.error.is_some() {
             self.state.paused = true;
-            self.clear_loading();
             return;
         }
         if !playback.loaded {
             return;
-        }
-        if self.pending_playback.is_none() && self.state.player.loading.active {
-            self.clear_loading();
         }
         self.playback_observed = true;
         // A picture of the media, past its fade-in, stands for it from now
@@ -2925,56 +2978,69 @@ pub(crate) mod tests {
         e.db.catalog_apply(&[work, season, ep], &[], &[binding], &[danmaku])
             .unwrap();
 
-        // Opening the file defers kernel.open and shows the loading overlay.
+        // Opening the file stays on the current page with the loading modal and defers kernel.open.
         e.open_file(MediaSource::new(url)).unwrap();
         assert!(e.state.player.loading.active);
+        assert_eq!(e.state.player.loading.title, "葬送的芙莉莲");
+        assert_eq!(e.state.player.loading.stage, LoadingStage::LoadingDanmaku);
+        assert!(!e.state.playing);
+        assert!(!e.state.expanded);
         assert!(!e.state.video);
         assert!(!kernel.calls().iter().any(|c| c.starts_with("open ")));
         assert!(e.pending_playback.as_ref().is_some_and(|p| p.waiting_comments));
-        assert!(e.state.player.loading.steps.iter().any(|s| {
-            !s.done && matches!(s.message, LoadingMessage::LoadingDanmaku)
-        }));
 
         // Deliver preloaded comments from background task.
-        e.found.lock().unwrap().push(matching::Found::Comments {
-            revision: e.match_revision,
-            request_generation: e.danmaku_generation,
+        let preload_revision = e.preload_revision;
+        e.found.lock().unwrap().push(matching::Found::PreloadComments {
+            preload_revision,
+            file,
             episode: 12345,
             result: Ok(("42".into(), 42)),
         });
         e.take_found();
 
-        // Video now opens immediately with the preloaded danmaku mounted.
+        // Modal closes immediately and video opens with preloaded danmaku mounted.
         assert!(e.pending_playback.is_none());
+        assert!(!e.state.player.loading.active);
+        assert!(e.state.playing);
+        assert!(e.state.expanded);
         assert!(e.state.video);
         assert_eq!(e.state.player.danmaku_count, 42);
         let calls = kernel.calls();
         assert!(calls.iter().any(|c| c.starts_with("open ")));
         assert!(calls.contains(&"add danmaku 弹弹play".to_string()));
-        // Handoff stays on "StartingPlayback" until kernel reports loaded.
-        assert!(e.state.player.loading.active);
-        assert!(e.state.player.loading.steps.iter().any(|s| {
-            s.done && matches!(s.message, LoadingMessage::DanmakuLoaded { count: 42 })
-        }));
-
-        *kernel.playback.lock().unwrap() = Playback {
-            source: Some(url.into()),
-            loaded: true,
-            playing: true,
-            ..Default::default()
-        };
-        e.player_tick().unwrap();
-        assert!(!e.state.player.loading.active);
     }
 
     #[test]
-    fn skip_danmaku_preload_and_timeout_start_playback_immediately() {
+    fn skip_cancel_and_timeout_handle_danmaku_preload_cleanly() {
         let (mut e, kernel) = with_kernel();
         e.state.features.danmaku = true;
         e.set_preference("load_danmaku_before_play".into(), true)
             .unwrap();
         e.db.add_source("dandanplay", "remote", "http://127.0.0.1:9", "anime")
             .unwrap();
+
+        // Cancel path: stays on current screen and does not open the video.
+        let url_cancel = "http://127.0.0.1:9/api/v1/stream/id/ep_cancel";
+        e.db.opened(
+            url_cancel,
+            Some(&erika_store::Fingerprint {
+                md5: "11111111111111111111111111111111".into(),
+                size: 4096,
+            }),
+        )
+        .unwrap();
+        e.open_file(MediaSource::new(url_cancel)).unwrap();
+        assert!(e.state.player.loading.active);
+        assert_eq!(e.state.player.loading.stage, LoadingStage::Recognizing);
+        assert!(!e.state.playing);
+        e.cancel_danmaku_preload().unwrap();
+        assert!(!e.state.player.loading.active);
+        assert!(e.pending_playback.is_none());
+        assert!(!e.state.playing);
+        assert!(!kernel.calls().iter().any(|c| c.starts_with("open ")));
+
+        // Skip path: opens immediately and dismisses the loading modal.
         let url = "http://127.0.0.1:9/api/v1/stream/id/ep2";
         e.db.opened(
             url,
@@ -2986,15 +3052,39 @@ pub(crate) mod tests {
         .unwrap();
         e.open_file(MediaSource::new(url)).unwrap();
         assert!(e.state.player.loading.active);
+        assert!(!e.state.playing);
         assert!(!e.state.video);
 
-        // User skips waiting -> opens immediately and dismisses loading overlay.
         e.skip_danmaku_preload().unwrap();
+        assert!(e.state.playing);
+        assert!(e.state.expanded);
         assert!(e.state.video);
         assert!(!e.state.player.loading.active);
         assert!(kernel.calls().iter().any(|c| c.starts_with("open ")));
 
-        // Timeout path: opening a second video and expiring its start timestamp starts playback.
+        // Cancelling a second preload while another video is playing keeps the current video intact.
+        let url_keep = "http://127.0.0.1:9/api/v1/stream/id/ep_keep";
+        e.db.opened(
+            url_keep,
+            Some(&erika_store::Fingerprint {
+                md5: "22222222222222222222222222222222".into(),
+                size: 4096,
+            }),
+        )
+        .unwrap();
+        let active_title = e.state.title.clone();
+        e.open_file(MediaSource::new(url_keep)).unwrap();
+        assert!(e.state.player.loading.active);
+        assert!(e.state.playing);
+        assert_eq!(e.state.title, active_title);
+        e.cancel_danmaku_preload().unwrap();
+        assert!(!e.state.player.loading.active);
+        assert!(e.state.playing);
+        assert!(e.state.video);
+        assert_eq!(e.state.title, active_title);
+
+        // Timeout path: even when nothing is playing yet, tick_player starts playback once expired.
+        e.close_player().unwrap();
         let url3 = "http://127.0.0.1:9/api/v1/stream/id/ep3";
         e.db.opened(
             url3,
@@ -3006,14 +3096,14 @@ pub(crate) mod tests {
         .unwrap();
         e.open_file(MediaSource::new(url3)).unwrap();
         assert!(e.state.player.loading.active);
+        assert!(!e.state.playing);
         assert!(!e.state.video);
         e.pending_playback.as_mut().unwrap().started_at =
             web_time::Instant::now() - PRELOAD_TIMEOUT - std::time::Duration::from_secs(1);
         e.player_tick().unwrap();
         assert!(e.pending_playback.is_none());
+        assert!(!e.state.player.loading.active);
+        assert!(e.state.playing);
         assert!(e.state.video);
-        assert!(e.state.player.loading.steps.iter().any(|s| {
-            matches!(s.message, LoadingMessage::TimedOut)
-        }));
     }
 }

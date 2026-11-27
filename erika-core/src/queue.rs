@@ -277,17 +277,22 @@ impl ErikaEngine {
         } else {
             start
         };
-        self.start(entry.title, entry.note, no_picture(), progress);
-        self.file = file;
-        self.media_playing = entry.media;
-        self.publish_queue(&entry.source);
-        self.begin_playback(
-            Some(entry.source.clone()),
+        self.launch_playback(crate::player::PlaybackLaunch {
+            title: entry.title,
+            subtitle: entry.note,
+            still: no_picture(),
+            progress,
+            source: Some(entry.source),
             start,
-            bern::current_entry(),
+            entry: bern::current_entry(),
+            file,
             fingerprint,
-            true,
-        );
+            recognize: true,
+            from_stage: false,
+            media_playing: entry.media,
+            from_queue: true,
+            preserve_start_elapsed: false,
+        });
         Ok(())
     }
 

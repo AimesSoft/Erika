@@ -5,7 +5,7 @@
 //! into the mini player on the way back.
 
 mod player;
-use player::{player, player_props};
+use player::{danmaku_preload_dialog, danmaku_preload_dialog_props, player, player_props};
 mod search;
 #[cfg(any(
     feature = "bern-module-anime",
@@ -99,18 +99,6 @@ style! {
     }
 
     Stack.player_black { background: color(light: "#000000", dark: "#000000"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
-    Stack.player_loading_backdrop { background: color(light: "#141416", dark: "#141416"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
-    Stack.player_loading_card {
-        background: color(light: "#242429", dark: "#242429"),
-        foreground: color(light: "#FFFFFF", dark: "#FFFFFF"),
-        corner: 16,
-        shadow: shadow(24, y: 10, opacity: 0.45),
-    }
-    Stack.player_loading_cover {
-        background: color(light: "#2E2E34", dark: "#2E2E34"),
-        foreground: color(light: "#A0A0AA", dark: "#A0A0AA"),
-        corner: 10,
-    }
     // Two-layer pure element shadows (tight contact shadow + soft ambient halo)
     // keep bare white text, seek bars, and icons crisp even over pure white
     // frames without adding dark gradient scrims over the picture.
@@ -744,7 +732,7 @@ pub fn app(
 ) -> impl View {
     ui! {
         WindowSet(handle: AppWindows, primary: main, accent: app.accent, appearance: app.appearance, icon: app.app_icon) {
-            Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.player.panel && !app.matching.open && !app.player.arriving, immersive: app.playing && app.expanded && !app.player.arriving, landscape: app.playing && app.expanded) {
+            Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.player.panel && !app.matching.open && !app.player.arriving && !app.player.loading.active, immersive: app.playing && app.expanded && !app.player.arriving, landscape: app.playing && app.expanded) {
                 main_window(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, #[cfg(feature = "bern-module-downloads")] download_module: download_module, windows: windows, players: players)
             }
             Window(id: settings, title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, width: 1000, height: 660, min_width: 1000, min_height: 660, chrome: standard) {
@@ -807,7 +795,7 @@ pub fn main_window(
 ) -> impl View {
     ui! {
         Stack(variant: app_window, reduce_motion: app.preferences.reduce_motion) {
-            Timer(interval: 0.25, enabled: app.playing) => app.player_tick()
+            Timer(interval: 0.25, enabled: app.playing || app.player.loading.active) => app.player_tick()
             // Expire transient toasts once their display duration ends so
             // newly mounted windows/overlays never replay stale notices.
             Timer(interval: 1.0, enabled: app.has_notice) => app.expire_notice()
@@ -835,6 +823,7 @@ pub fn main_window(
                 account_dialogs(app: app, settings_window: false)
             }
             info_dialogs(app: app)
+            danmaku_preload_dialog(app: app)
         }
     }
 }

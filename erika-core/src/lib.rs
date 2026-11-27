@@ -109,8 +109,7 @@ pub struct ErikaEngine {
     online_danmaku_count: usize,
     pending_playback: Option<player::PendingPlayback>,
     preloaded_danmaku: Option<(String, usize)>,
-    loading_step_seq: i64,
-    loading_started_at: Option<web_time::Instant>,
+    preload_revision: u64,
     notice_at: Option<web_time::Instant>,
 }
 
@@ -208,8 +207,7 @@ impl Default for ErikaEngine {
             online_danmaku_count: 0,
             pending_playback: None,
             preloaded_danmaku: None,
-            loading_step_seq: 0,
-            loading_started_at: None,
+            preload_revision: 0,
             notice_at: None,
             feedback_remaining: 0.0,
             saved_modules: None,
@@ -368,7 +366,7 @@ impl ErikaEngine {
             self.save_history();
         }
         self.cancel_resolution();
-        self.clear_loading();
+        self.cancel_pending_preload();
         self.preloaded_danmaku = None;
         self.logical_source = None;
         self.file = None;
@@ -797,27 +795,26 @@ impl erika::Commands for ErikaEngine {
         } else {
             (0.0, 0.0)
         };
-        self.start(
-            without_extension(&recent.name),
-            recent
+        self.launch_playback(player::PlaybackLaunch {
+            title: without_extension(&recent.name),
+            subtitle: recent
                 .source
                 .as_ref()
                 .map(player::source_note)
                 .unwrap_or(PlayingNote::LocalFile),
-            recent.still,
+            still: recent.still,
             progress,
-        );
-        self.file = file;
-        if let Some(source) = &recent.source {
-            self.prepare_queue(source);
-        }
-        self.begin_playback(
-            recent.source.clone(),
+            source: recent.source,
             start,
-            bern::current_entry(),
+            entry: bern::current_entry(),
+            file,
             fingerprint,
-            true,
-        );
+            recognize: true,
+            from_stage: false,
+            media_playing: None,
+            from_queue: false,
+            preserve_start_elapsed: false,
+        });
         Ok(())
     }
 
@@ -839,7 +836,7 @@ impl erika::Commands for ErikaEngine {
         self.state.expanded = false;
         self.state.paused = false;
         self.state.player.panel = false;
-        self.clear_loading();
+        self.cancel_pending_preload();
         self.preloaded_danmaku = None;
         self.unload();
         Ok(())
@@ -884,29 +881,24 @@ impl erika::Commands for ErikaEngine {
         } else if binding.items.is_empty() {
             return Err(CommandError::new("stale_binding", "文件的作品关联已更改"));
         }
-        let entering = !(self.state.playing && self.state.expanded);
-        self.start(
-            self.source_name(&source),
-            player::source_note(&source),
-            no_picture(),
-            0.,
-        );
-        if entering {
-            self.state.player.flies_in = from_stage;
-            self.state.player.arriving = from_stage;
-        }
-        self.file = Some(file);
-        self.state.elapsed = start;
-        self.prepare_queue(&source);
         // The caller selected a canonical chapter. Saved progress must never
         // replace its absolute timestamp (including when duration is unknown).
-        self.begin_playback(
-            Some(source.clone()),
+        self.launch_playback(player::PlaybackLaunch {
+            title: self.source_name(&source),
+            subtitle: player::source_note(&source),
+            still: no_picture(),
+            progress: 0.,
+            source: Some(source),
             start,
-            bern::current_entry(),
+            entry: bern::current_entry(),
+            file: Some(file),
             fingerprint,
-            true,
-        );
+            recognize: true,
+            from_stage,
+            media_playing: None,
+            from_queue: false,
+            preserve_start_elapsed: true,
+        });
         Ok(())
     }
 
@@ -925,26 +917,22 @@ impl erika::Commands for ErikaEngine {
         }
         let (file, fingerprint) = self.identify(&source);
         let (start, saved) = self.saved_position(file);
-        let entering = !(self.state.playing && self.state.expanded);
-        self.start(
+        self.launch_playback(player::PlaybackLaunch {
             title,
-            PlayingNote::Episode { episode },
+            subtitle: PlayingNote::Episode { episode },
             still,
-            if file.is_some() { saved } else { progress },
-        );
-        if entering {
-            self.state.player.flies_in = from_stage;
-            self.state.player.arriving = from_stage;
-        }
-        self.file = file;
-        self.prepare_queue(&source);
-        self.begin_playback(
-            Some(source.clone()),
+            progress: if file.is_some() { saved } else { progress },
+            source: Some(source),
             start,
-            bern::current_entry(),
+            entry: bern::current_entry(),
+            file,
             fingerprint,
-            true,
-        );
+            recognize: true,
+            from_stage,
+            media_playing: None,
+            from_queue: false,
+            preserve_start_elapsed: false,
+        });
         Ok(())
     }
 
@@ -963,25 +951,26 @@ impl erika::Commands for ErikaEngine {
             self.identify(&source)
         };
         let (start, progress) = self.saved_position(file);
-        self.start(
+        self.launch_playback(player::PlaybackLaunch {
             title,
-            if downloading {
+            subtitle: if downloading {
                 PlayingNote::Downloading
             } else {
                 PlayingNote::Downloaded
             },
-            no_picture(),
+            still: no_picture(),
             progress,
-        );
-        self.file = file;
-        self.prepare_queue(&source);
-        self.begin_playback(
-            Some(source.clone()),
+            source: Some(source),
             start,
-            bern::current_entry(),
+            entry: bern::current_entry(),
+            file,
             fingerprint,
-            !downloading,
-        );
+            recognize: !downloading,
+            from_stage: false,
+            media_playing: None,
+            from_queue: false,
+            preserve_start_elapsed: false,
+        });
         Ok(())
     }
 
@@ -1068,7 +1057,7 @@ impl erika::Commands for ErikaEngine {
         self.state.playing = false;
         self.state.expanded = false;
         self.state.player.arriving = false;
-        self.clear_loading();
+        self.cancel_pending_preload();
         self.preloaded_danmaku = None;
         self.unload();
         Ok(())
@@ -1244,10 +1233,14 @@ impl erika::Commands for ErikaEngine {
     }
     fn skip_danmaku_preload(&mut self) -> Result<(), CommandError> {
         if self.pending_playback.is_some() {
-            self.finish_pending_playback(false);
+            self.finish_pending_playback();
         } else if self.state.player.loading.active {
-            self.clear_loading();
+            self.cancel_pending_preload();
         }
+        Ok(())
+    }
+    fn cancel_danmaku_preload(&mut self) -> Result<(), CommandError> {
+        self.cancel_pending_preload();
         Ok(())
     }
     fn send_danmaku(&mut self, text: String) -> Result<(), CommandError> {
